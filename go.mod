@@ -1,4 +1,4 @@
-module hw-1
+module gitlab.ozon.dev/qwestard/homework
 
 go 1.23.5
 
