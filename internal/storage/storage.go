@@ -22,11 +22,7 @@ func New(dataFile string) (*OrderStorage, error) {
 		dataFile: dataFile,
 	}
 	if err := st.loadFromFile(); err != nil {
-		file, errCreate := os.OpenFile(dataFile, os.O_CREATE|os.O_WRONLY, 0644)
-		if errCreate != nil {
-			return st, fmt.Errorf("не удалось создать файл базы: %w", errCreate)
-		}
-		file.Close()
+		return st, err
 	}
 	return st, nil
 }
@@ -51,7 +47,7 @@ func (st *OrderStorage) loadFromFile() error {
 }
 
 func (st *OrderStorage) saveToFile() error {
-	file, err := os.OpenFile(st.dataFile, os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(st.dataFile, os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}

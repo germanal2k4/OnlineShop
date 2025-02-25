@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,8 +12,9 @@ import (
 	"gitlab.ozon.dev/qwestard/homework/internal/storage"
 )
 
+const storageFile = "orders.json"
+
 func main() {
-	const storageFile = "orders.json"
 	st, err := storage.New(storageFile)
 	if err != nil {
 		fmt.Printf("Ошибка при создании хранилища: %v\n", err)
@@ -29,11 +31,12 @@ func main() {
 			return
 		}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		parts := strings.Fields(line)
+
+		if len(parts) < 1 {
+			fmt.Printf("Неправильный ввод: %v\n", err)
+			return
+		}
 		cmd := parts[0]
 		args := parts[1:]
 
@@ -46,6 +49,8 @@ func main() {
 			handleAccept(args, st)
 		case "return_courier":
 			handleReturnCourier(args, st)
+		case "accept_from_courier":
+			acceptOrdersFromCourier(args, st)
 		case "deliver":
 			handleDeliver(args, st)
 		case "clientreturn":
@@ -92,6 +97,47 @@ func handleAccept(args []string, st *storage.OrderStorage) {
 	fmt.Printf("Заказ %s принят для пользователя %s (deadline=%s)\n", orderID, userID, deadline)
 }
 
+func acceptOrdersFromCourier(args []string, st *storage.OrderStorage) {
+	if len(args) != 1 {
+		fmt.Println("Формат: accept_from_courier <filename>")
+		return
+	}
+	fileName := args[0]
+	file, err := os.OpenFile(fileName, os.O_RDONLY, 0644)
+	if err != nil {
+		fmt.Printf("Ошибка открытия файла: %v\n", err)
+	}
+	defer file.Close()
+
+	var orders []struct {
+		ID              string `json:"id"`
+		RecipientID     string `json:"recipient_id"`
+		StorageDeadline string `json:"storage_deadline"`
+	}
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&orders); err != nil {
+		fmt.Printf("Ошибка декодирования JSON: %v\n", err)
+		return
+	}
+
+	for _, o := range orders {
+		deadline, err := time.Parse(time.RFC3339, o.StorageDeadline)
+		if err != nil {
+			fmt.Printf("Неверный формат даты для заказа %s: %v\n", o.ID, err)
+			continue
+		}
+		err = st.AcceptOrderFromCourier(o.ID, o.RecipientID, deadline)
+		if err != nil {
+			fmt.Printf("Ошибка при принятии заказа %s: %v\n", o.ID, err)
+			continue
+		}
+
+		fmt.Printf("Заказ %s принят для пользователя %s\n", o.ID, o.RecipientID)
+
+	}
+
+}
 func handleReturnCourier(args []string, st *storage.OrderStorage) {
 	if len(args) != 1 {
 		fmt.Println("Формат: return_courier <orderID>")
