@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,34 +20,28 @@ func New(st *storage.OrderStorage) *Handler {
 }
 
 func (h *Handler) Execute(cmd string, args []string) error {
-	switch cmd {
-	case "help":
-		h.printHelp()
-	case "exit":
-		h.handleExit()
-	case "accept":
-		h.handleAccept(args)
-	case "return_courier":
-		h.handleReturnCourier(args)
-	case "deliver":
-		h.handleDeliver(args)
-	case "clientreturn":
-		h.handleClientReturn(args)
-	case "list":
-		h.handleList(args)
-	case "returns":
-		h.handleReturns(args)
-	case "history":
-		h.handleHistory()
-	case "accept_from_courier":
-		h.acceptOrdersFromCourier(args)
-	default:
-		fmt.Println("Неизвестная команда. Введите 'help' для справки.")
+	commands := map[string]func([]string){
+		"help":                h.printHelp,
+		"exit":                h.handleExit,
+		"accept":              h.handleAccept,
+		"return_courier":      h.handleReturnCourier,
+		"deliver":             h.handleDeliver,
+		"clientreturn":        h.handleClientReturn,
+		"list":                h.handleList,
+		"returns":             h.handleReturns,
+		"history":             func(args []string) { h.handleHistory() },
+		"accept_from_courier": h.acceptOrdersFromCourier,
+	}
+
+	if fn, ok := commands[cmd]; ok {
+		fn(args)
+	} else {
+		return errors.New("неизвестная команда. Введите 'help' для справки")
 	}
 	return nil
 }
 
-func (h *Handler) printHelp() {
+func (h *Handler) printHelp(args []string) {
 	fmt.Println(`Доступные команды:
   help
     - выводит справку
@@ -70,30 +65,41 @@ func (h *Handler) printHelp() {
     - принять заказы из файла JSON (массив заказов)`)
 }
 
-func (h *Handler) handleExit() {
+func (h *Handler) handleExit(args []string) {
 	fmt.Println("Выход из приложения.")
 	os.Exit(0)
 }
 func (h *Handler) handleAccept(args []string) {
-	if len(args) != 3 {
-		fmt.Println("Формат: accept <orderID> <userID> <deadline in RFC3339>")
+	if len(args) != 6 {
+		fmt.Println("Формат: accept <orderID> <userID> <deadline RFC3339> <packaging> <weight> <baseCost>")
 		return
 	}
 	orderID := args[0]
 	userID := args[1]
 	deadlineStr := args[2]
+	packagingOption := args[3]
+	weight, err := strconv.ParseFloat(args[4], 64)
+	if err != nil {
+		fmt.Printf("Ошибка разбора веса: %v\n", err)
+		return
+	}
+	baseCost, err := strconv.ParseFloat(args[5], 64)
+	if err != nil {
+		fmt.Printf("Ошибка разбора базовой стоимости: %v\n", err)
+		return
+	}
 	deadline, err := time.Parse(time.RFC3339, deadlineStr)
 	if err != nil {
 		fmt.Printf("Ошибка разбора даты: %v\n", err)
 		return
 	}
-	err = h.st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err = h.st.AcceptOrderFromCourier(orderID, userID, deadline, packagingOption, weight, baseCost)
 	if err != nil {
 		fmt.Printf("Ошибка accept: %v\n", err)
 		return
 	}
-	fmt.Printf("Заказ %s принят для пользователя %s (deadline=%s)\n", orderID, userID, deadline)
-
+	fmt.Printf("Заказ %s принят для пользователя %s (deadline=%s, упаковка=%s, вес=%.2f, стоимость=%.2f)\n",
+		orderID, userID, deadline, packagingOption, weight, baseCost)
 }
 
 func (h *Handler) handleReturnCourier(args []string) {
@@ -227,16 +233,19 @@ func (h *Handler) acceptOrdersFromCourier(args []string) {
 		return
 	}
 	fileName := args[0]
-	file, err := os.OpenFile(fileName, os.O_RDONLY, 0644)
+	file, err := os.Open(fileName)
 	if err != nil {
-		fmt.Printf("Ошибка открытия файла: %v\n", err)
+		fmt.Printf("Ошибка открытия файла %s: %v\n", fileName, err)
+		return
 	}
 	defer file.Close()
-
 	var orders []struct {
-		ID              string `json:"id"`
-		RecipientID     string `json:"recipient_id"`
-		StorageDeadline string `json:"storage_deadline"`
+		ID              string  `json:"id"`
+		RecipientID     string  `json:"recipient_id"`
+		StorageDeadline string  `json:"storage_deadline"`
+		Packaging       string  `json:"packaging"`
+		Weight          float64 `json:"weight"`
+		BaseCost        float64 `json:"base_cost"`
 	}
 
 	decoder := json.NewDecoder(file)
@@ -251,14 +260,11 @@ func (h *Handler) acceptOrdersFromCourier(args []string) {
 			fmt.Printf("Неверный формат даты для заказа %s: %v\n", o.ID, err)
 			continue
 		}
-		err = h.st.AcceptOrderFromCourier(o.ID, o.RecipientID, deadline)
+		err = h.st.AcceptOrderFromCourier(o.ID, o.RecipientID, deadline, o.Packaging, o.Weight, o.BaseCost)
 		if err != nil {
 			fmt.Printf("Ошибка при принятии заказа %s: %v\n", o.ID, err)
 			continue
 		}
-
 		fmt.Printf("Заказ %s принят для пользователя %s\n", o.ID, o.RecipientID)
-
 	}
-
 }

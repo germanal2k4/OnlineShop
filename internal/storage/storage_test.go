@@ -15,6 +15,8 @@ const testFile = "test_orders.json"
 
 func setupStorage(t *testing.T) *storage.OrderStorage {
 	_ = os.Remove(testFile)
+	err := os.WriteFile(testFile, []byte("[]"), 0644)
+	assert.NoError(t, err, "Не удалось создать тестовый файл с пустым JSON-массивом")
 	st, err := storage.New(testFile)
 	assert.NoError(t, err)
 	return st
@@ -26,15 +28,18 @@ func TestAcceptOrder(t *testing.T) {
 	orderID := "order123"
 	userID := "user42"
 	deadline := time.Now().Add(24 * time.Hour)
-
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
 	assert.NoError(t, err, "Прием заказа не должен выдавать ошибку")
 
 	orders, err := st.GetOrders(userID, 0, false)
 	assert.NoError(t, err)
 	assert.Len(t, orders, 1)
-	assert.Equal(t, orderID, orders[0].ID)
-	assert.Equal(t, models.OrderStateAccepted, orders[0].CurrentState())
+	order := orders[0]
+	assert.Equal(t, orderID, order.ID)
+	assert.Equal(t, models.OrderStateAccepted, order.CurrentState())
+	assert.Equal(t, 105.0, order.Cost)
+	assert.Equal(t, "package", order.Packaging)
+	assert.Equal(t, 5.0, order.Weight)
 }
 
 func TestDeliverOrder(t *testing.T) {
@@ -43,8 +48,7 @@ func TestDeliverOrder(t *testing.T) {
 	orderID := "order789"
 	userID := "user88"
 	deadline := time.Now().Add(24 * time.Hour)
-
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "box", 20.0, 150.0)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -62,8 +66,7 @@ func TestClientReturn(t *testing.T) {
 	orderID := "order987"
 	userID := "user99"
 	deadline := time.Now().Add(24 * time.Hour)
-
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -83,8 +86,7 @@ func TestReturnOrderToCourier_Accepted(t *testing.T) {
 	orderID := "orderAccepted"
 	userID := "userTest"
 	deadline := time.Now().Add(24 * time.Hour)
-
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
 	assert.NoError(t, err)
 
 	err = st.ReturnOrderToCourier(orderID)
@@ -100,8 +102,7 @@ func TestReturnOrderToCourier_ClientRtn(t *testing.T) {
 	orderID := "orderClientRtn"
 	userID := "userTest"
 	deadline := time.Now().Add(24 * time.Hour)
-
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline)
+	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "box", 20.0, 150.0)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -126,9 +127,9 @@ func TestReturnOrderToCourier_ClientRtn(t *testing.T) {
 func TestGetOrders(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("order1", "user100", time.Now().Add(24*time.Hour))
+	err := st.AcceptOrderFromCourier("order1", "user100", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("order2", "user100", time.Now().Add(24*time.Hour))
+	err = st.AcceptOrderFromCourier("order2", "user100", time.Now().Add(24*time.Hour), "package", 5.0, 120.0)
 	assert.NoError(t, err)
 
 	orders, err := st.GetOrders("user100", 0, false)
@@ -139,9 +140,9 @@ func TestGetOrders(t *testing.T) {
 func TestGetReturns(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("orderA", "userA", time.Now().Add(24*time.Hour))
+	err := st.AcceptOrderFromCourier("orderA", "userA", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("orderB", "userA", time.Now().Add(24*time.Hour))
+	err = st.AcceptOrderFromCourier("orderB", "userA", time.Now().Add(24*time.Hour), "package", 5.0, 110.0)
 	assert.NoError(t, err)
 	err = st.DeliverOrReturnClientOrders("userA", []string{"orderA"}, "deliver")
 	assert.NoError(t, err)
@@ -159,9 +160,9 @@ func TestGetReturns(t *testing.T) {
 func TestOrderHistory(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("order100", "userX", time.Now().Add(24*time.Hour))
+	err := st.AcceptOrderFromCourier("order100", "userX", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("order200", "userX", time.Now().Add(24*time.Hour))
+	err = st.AcceptOrderFromCourier("order200", "userX", time.Now().Add(24*time.Hour), "package", 5.0, 110.0)
 	assert.NoError(t, err)
 	err = st.DeliverOrReturnClientOrders("userX", []string{"order100"}, "deliver")
 	assert.NoError(t, err)

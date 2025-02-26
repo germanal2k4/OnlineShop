@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
@@ -72,13 +74,27 @@ func (st *OrderStorage) deleteOrder(orderID string) error {
 	return st.saveToFile()
 }
 
-func (st *OrderStorage) AcceptOrderFromCourier(orderID, recipientID string, deadline time.Time) error {
+func (st *OrderStorage) AcceptOrderFromCourier(orderID, recipientID string, deadline time.Time, packagingOption string, weight float64, baseCost float64) error {
 	if _, exists := st.orders[orderID]; exists {
 		return errors.New("заказ с таким ID уже существует (принят ранее)")
 	}
 	if deadline.Before(time.Now()) {
 		return errors.New("срок хранения уже истёк, не можем принять заказ")
 	}
+
+	var totalPackagingCost float64
+	packTypes := strings.Split(packagingOption, "+")
+	for _, pStr := range packTypes {
+		p, err := packaging.NewPackaging(pStr)
+		if err != nil {
+			return err
+		}
+		if err := p.Validate(weight); err != nil {
+			return err
+		}
+		totalPackagingCost += p.Cost()
+	}
+
 	t := now()
 	order := &models.Order{
 		ID:              orderID,
@@ -86,6 +102,9 @@ func (st *OrderStorage) AcceptOrderFromCourier(orderID, recipientID string, dead
 		StorageDeadline: deadline,
 		AcceptedAt:      t,
 		LastStateChange: t,
+		Weight:          weight,
+		Cost:            baseCost + totalPackagingCost,
+		Packaging:       packagingOption,
 	}
 	order.UpdateState(models.OrderStateAccepted)
 	st.orders[orderID] = order
@@ -145,8 +164,24 @@ func (st *OrderStorage) validateOrdersForDelivery(userID string, orderIDs []stri
 	return validOrders, nil
 }
 
+func validateReturnOrder(o *models.Order, userID string) error {
+	if o.RecipientID != userID {
+		return fmt.Errorf("заказ %s принадлежит другому пользователю", o.ID)
+	}
+	if o.CurrentState() != models.OrderStateDelivered {
+		return fmt.Errorf("заказ %s не в состоянии 'delivered'", o.ID)
+	}
+	if o.DeliveredAt.IsZero() {
+		return fmt.Errorf("заказ %s не имеет даты выдачи", o.ID)
+	}
+	if time.Since(o.DeliveredAt) > 48*time.Hour {
+		return fmt.Errorf("с момента выдачи заказа %s прошло более 2 суток", o.ID)
+	}
+	return nil
+}
+
 func (st *OrderStorage) validateOrdersForReturn(userID string, orderIDs []string) ([]*models.Order, error) {
-	validOrders := make([]*models.Order, 0, len(orderIDs))
+	var validOrders []*models.Order
 	var invalidErrors []string
 
 	for _, id := range orderIDs {
@@ -155,30 +190,17 @@ func (st *OrderStorage) validateOrdersForReturn(userID string, orderIDs []string
 			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не найден", id))
 			continue
 		}
-		if o.RecipientID != userID {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s принадлежит другому пользователю", id))
-			continue
-		}
-		if o.CurrentState() != models.OrderStateDelivered {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не в состоянии 'delivered'", id))
-			continue
-		}
-		if o.DeliveredAt.IsZero() {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не имеет даты выдачи", id))
-			continue
-		}
-		if time.Since(o.DeliveredAt) > 48*time.Hour {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("с момента выдачи заказа %s прошло более 2 суток", id))
+		if err := validateReturnOrder(o, userID); err != nil {
+			invalidErrors = append(invalidErrors, err.Error())
 			continue
 		}
 		validOrders = append(validOrders, o)
 	}
 	if len(invalidErrors) > 0 {
-		return nil, errors.New("валидация возврата не пройдена: " + fmt.Sprintf("%v", invalidErrors))
+		return nil, fmt.Errorf("валидация возврата не пройдена: %s", strings.Join(invalidErrors, "; "))
 	}
 	return validOrders, nil
 }
-
 func (st *OrderStorage) DeliverOrReturnClientOrders(userID string, orderIDs []string, action string) error {
 	var ordersToProcess []*models.Order
 	var err error
@@ -217,14 +239,15 @@ func (st *OrderStorage) DeliverOrReturnClientOrders(userID string, orderIDs []st
 func (st *OrderStorage) GetOrders(userID string, lastN int, onlyInPVZ bool) ([]*models.Order, error) {
 	result := make([]*models.Order, 0)
 	for _, o := range st.orders {
-		if o.RecipientID == userID {
-			if onlyInPVZ {
-				if o.CurrentState() == models.OrderStateAccepted {
-					result = append(result, o)
-				}
-			} else {
-				result = append(result, o)
-			}
+		if o.RecipientID != userID {
+			continue
+		}
+		include := true
+		if onlyInPVZ && o.CurrentState() != models.OrderStateAccepted {
+			include = false
+		}
+		if include {
+			result = append(result, o)
 		}
 	}
 	sortOrdersByLastChangeDesc(result)
