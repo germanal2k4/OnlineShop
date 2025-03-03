@@ -1,18 +1,26 @@
 .PHONY: deps build run lint install-tools all
 
+GOBIN := $(CURDIR)/bin
+export GOBIN
+
 deps:
-	@go mod tidy
+	@echo "Обновление зависимостей..."
+	go mod tidy
 
 install-tools:
+	@echo "Установка golangci-lint..."
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
-mlint: install-tools
-	golangci-lint run
+lint: install-tools
+	@echo "Запуск линтеров..."
+	@$(GOBIN)/golangci-lint run
 
 build: deps
-	go build -o myapp ./cmd
+	@echo "Сборка проекта..."
+	@go build -o $(GOBIN)/myapp ./cmd
 
 run: build
-	./myapp
+	@echo "Запуск приложения..."
+	@$(GOBIN)/myapp
 
 all: lint build run

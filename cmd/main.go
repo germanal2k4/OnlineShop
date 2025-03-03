@@ -2,17 +2,20 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
-	"gitlab.ozon.dev/qwestard/homework/internal/handler"
-	"gitlab.ozon.dev/qwestard/homework/internal/storage"
+	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"os"
 	"strings"
+
+	"gitlab.ozon.dev/qwestard/homework/internal/handler"
+	"gitlab.ozon.dev/qwestard/homework/internal/storage"
 )
 
 const storageFile = "orders.json"
 
 func main() {
-	st, err := storage.New(storageFile)
+	st, err := storage.New(storageFile, packaging.NewPackagingService())
 	if err != nil {
 		fmt.Printf("Ошибка при создании хранилища: %v\n", err)
 		return
@@ -40,6 +43,10 @@ func main() {
 
 		err = h.Execute(cmd, args)
 		if err != nil {
+			if errors.Is(err, handler.ErrExit) {
+				fmt.Println("Выход из приложения.")
+				break
+			}
 			fmt.Printf("Неправильный формат ввода: %v\n", err)
 		}
 	}

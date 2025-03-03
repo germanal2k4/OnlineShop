@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
+	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"gitlab.ozon.dev/qwestard/homework/internal/storage"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ func setupStorage(t *testing.T) *storage.OrderStorage {
 	_ = os.Remove(testFile)
 	err := os.WriteFile(testFile, []byte("[]"), 0644)
 	assert.NoError(t, err, "Не удалось создать тестовый файл с пустым JSON-массивом")
-	st, err := storage.New(testFile)
+	st, err := storage.New(testFile, packaging.NewPackagingService())
 	assert.NoError(t, err)
 	return st
 }
@@ -28,7 +29,15 @@ func TestAcceptOrder(t *testing.T) {
 	orderID := "order123"
 	userID := "user42"
 	deadline := time.Now().Add(24 * time.Hour)
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
+	req := storage.AcceptOrderFromCourierRequest{
+		OrderID:     orderID,
+		RecipientID: userID,
+		Deadline:    deadline,
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	err := st.AcceptOrderFromCourier(req)
 	assert.NoError(t, err, "Прием заказа не должен выдавать ошибку")
 
 	orders, err := st.GetOrders(userID, 0, false)
@@ -37,8 +46,8 @@ func TestAcceptOrder(t *testing.T) {
 	order := orders[0]
 	assert.Equal(t, orderID, order.ID)
 	assert.Equal(t, models.OrderStateAccepted, order.CurrentState())
-	assert.Equal(t, 105.0, order.Cost)
-	assert.Equal(t, "package", order.Packaging)
+	assert.Equal(t, 100.0, order.Cost)
+	assert.Equal(t, []string{"bag"}, order.Packaging)
 	assert.Equal(t, 5.0, order.Weight)
 }
 
@@ -48,7 +57,15 @@ func TestDeliverOrder(t *testing.T) {
 	orderID := "order789"
 	userID := "user88"
 	deadline := time.Now().Add(24 * time.Hour)
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "box", 20.0, 150.0)
+	req := storage.AcceptOrderFromCourierRequest{
+		OrderID:     orderID,
+		RecipientID: userID,
+		Deadline:    deadline,
+		Packaging:   []packaging.PackagingType{packaging.PackagingBox},
+		Weight:      20.0,
+		BaseCost:    150.0,
+	}
+	err := st.AcceptOrderFromCourier(req)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -66,7 +83,15 @@ func TestClientReturn(t *testing.T) {
 	orderID := "order987"
 	userID := "user99"
 	deadline := time.Now().Add(24 * time.Hour)
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
+	req := storage.AcceptOrderFromCourierRequest{
+		OrderID:     orderID,
+		RecipientID: userID,
+		Deadline:    deadline,
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	err := st.AcceptOrderFromCourier(req)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -86,7 +111,15 @@ func TestReturnOrderToCourier_Accepted(t *testing.T) {
 	orderID := "orderAccepted"
 	userID := "userTest"
 	deadline := time.Now().Add(24 * time.Hour)
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "package", 5.0, 100.0)
+	req := storage.AcceptOrderFromCourierRequest{
+		OrderID:     orderID,
+		RecipientID: userID,
+		Deadline:    deadline,
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	err := st.AcceptOrderFromCourier(req)
 	assert.NoError(t, err)
 
 	err = st.ReturnOrderToCourier(orderID)
@@ -102,7 +135,15 @@ func TestReturnOrderToCourier_ClientRtn(t *testing.T) {
 	orderID := "orderClientRtn"
 	userID := "userTest"
 	deadline := time.Now().Add(24 * time.Hour)
-	err := st.AcceptOrderFromCourier(orderID, userID, deadline, "box", 20.0, 150.0)
+	req := storage.AcceptOrderFromCourierRequest{
+		OrderID:     orderID,
+		RecipientID: userID,
+		Deadline:    deadline,
+		Packaging:   []packaging.PackagingType{packaging.PackagingBox},
+		Weight:      20.0,
+		BaseCost:    150.0,
+	}
+	err := st.AcceptOrderFromCourier(req)
 	assert.NoError(t, err)
 
 	err = st.DeliverOrReturnClientOrders(userID, []string{orderID}, "deliver")
@@ -127,9 +168,25 @@ func TestReturnOrderToCourier_ClientRtn(t *testing.T) {
 func TestGetOrders(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("order1", "user100", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
+	req1 := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "order1",
+		RecipientID: "user100",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	req2 := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "order2",
+		RecipientID: "user100",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    120.0,
+	}
+	err := st.AcceptOrderFromCourier(req1)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("order2", "user100", time.Now().Add(24*time.Hour), "package", 5.0, 120.0)
+	err = st.AcceptOrderFromCourier(req2)
 	assert.NoError(t, err)
 
 	orders, err := st.GetOrders("user100", 0, false)
@@ -140,9 +197,25 @@ func TestGetOrders(t *testing.T) {
 func TestGetReturns(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("orderA", "userA", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
+	reqA := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "orderA",
+		RecipientID: "userA",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	reqB := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "orderB",
+		RecipientID: "userA",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    110.0,
+	}
+	err := st.AcceptOrderFromCourier(reqA)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("orderB", "userA", time.Now().Add(24*time.Hour), "package", 5.0, 110.0)
+	err = st.AcceptOrderFromCourier(reqB)
 	assert.NoError(t, err)
 	err = st.DeliverOrReturnClientOrders("userA", []string{"orderA"}, "deliver")
 	assert.NoError(t, err)
@@ -160,9 +233,25 @@ func TestGetReturns(t *testing.T) {
 func TestOrderHistory(t *testing.T) {
 	st := setupStorage(t)
 
-	err := st.AcceptOrderFromCourier("order100", "userX", time.Now().Add(24*time.Hour), "package", 5.0, 100.0)
+	req1 := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "order100",
+		RecipientID: "userX",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    100.0,
+	}
+	req2 := storage.AcceptOrderFromCourierRequest{
+		OrderID:     "order200",
+		RecipientID: "userX",
+		Deadline:    time.Now().Add(24 * time.Hour),
+		Packaging:   []packaging.PackagingType{packaging.PackagingBag},
+		Weight:      5.0,
+		BaseCost:    110.0,
+	}
+	err := st.AcceptOrderFromCourier(req1)
 	assert.NoError(t, err)
-	err = st.AcceptOrderFromCourier("order200", "userX", time.Now().Add(24*time.Hour), "package", 5.0, 110.0)
+	err = st.AcceptOrderFromCourier(req2)
 	assert.NoError(t, err)
 	err = st.DeliverOrReturnClientOrders("userX", []string{"order100"}, "deliver")
 	assert.NoError(t, err)

@@ -7,21 +7,31 @@ import (
 	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
 )
 
+type AcceptOrderFromCourierRequest struct {
+	OrderID     string
+	RecipientID string
+	Deadline    time.Time
+	Packaging   []packaging.PackagingType
+	Weight      float64
+	BaseCost    float64
+}
+
 type OrderStorage struct {
 	orders   map[string]*models.Order
 	dataFile string
+	ps       packaging.PackagingService
 }
 
-func New(dataFile string) (*OrderStorage, error) {
+func New(dataFile string, ps packaging.PackagingService) (*OrderStorage, error) {
 	st := &OrderStorage{
 		orders:   make(map[string]*models.Order),
 		dataFile: dataFile,
+		ps:       ps,
 	}
 	if err := st.loadFromFile(); err != nil {
 		return st, err
@@ -74,40 +84,56 @@ func (st *OrderStorage) deleteOrder(orderID string) error {
 	return st.saveToFile()
 }
 
-func (st *OrderStorage) AcceptOrderFromCourier(orderID, recipientID string, deadline time.Time, packagingOption string, weight float64, baseCost float64) error {
-	if _, exists := st.orders[orderID]; exists {
+func (st *OrderStorage) AcceptOrderFromCourier(req AcceptOrderFromCourierRequest) error {
+	if _, exists := st.orders[req.OrderID]; exists {
 		return errors.New("заказ с таким ID уже существует (принят ранее)")
 	}
-	if deadline.Before(time.Now()) {
+	if req.Deadline.Before(time.Now()) {
 		return errors.New("срок хранения уже истёк, не можем принять заказ")
 	}
 
 	var totalPackagingCost float64
-	packTypes := strings.Split(packagingOption, "+")
-	for _, pStr := range packTypes {
-		p, err := packaging.NewPackaging(pStr)
+	var mainCount, filmCount int
+
+	for _, pt := range req.Packaging {
+		pkg, err := st.ps.GetPackaging(pt)
 		if err != nil {
 			return err
 		}
-		if err := p.Validate(weight); err != nil {
+		if err := pkg.Validate(req.Weight); err != nil {
 			return err
 		}
-		totalPackagingCost += p.Cost()
+		if pt == packaging.PackagingFilm {
+			filmCount++
+		} else {
+			mainCount++
+		}
+		totalPackagingCost += pkg.Cost()
 	}
 
-	t := now()
+	if mainCount > 1 {
+		return errors.New("недопустимо использовать более одной основной упаковки (не film)")
+	}
+	if mainCount == 1 && filmCount > 1 {
+		return errors.New("к основной упаковке можно добавить не более одной пленки")
+	}
+
+	t := time.Now().UTC()
 	order := &models.Order{
-		ID:              orderID,
-		RecipientID:     recipientID,
-		StorageDeadline: deadline,
+		ID:              req.OrderID,
+		RecipientID:     req.RecipientID,
+		StorageDeadline: req.Deadline,
 		AcceptedAt:      t,
 		LastStateChange: t,
-		Weight:          weight,
-		Cost:            baseCost + totalPackagingCost,
-		Packaging:       packagingOption,
+		Weight:          req.Weight,
+		Cost:            req.BaseCost,
+		Packaging:       make([]string, len(req.Packaging)),
+	}
+	for i, pt := range req.Packaging {
+		order.Packaging[i] = string(pt)
 	}
 	order.UpdateState(models.OrderStateAccepted)
-	st.orders[orderID] = order
+	st.orders[req.OrderID] = order
 	if err := st.saveToFile(); err != nil {
 		return fmt.Errorf("сбой при сохранении файла: %w", err)
 	}
@@ -136,29 +162,29 @@ func (st *OrderStorage) ReturnOrderToCourier(orderID string) error {
 
 func (st *OrderStorage) validateOrdersForDelivery(userID string, orderIDs []string) ([]*models.Order, error) {
 	validOrders := make([]*models.Order, 0, len(orderIDs))
-	var invalidErrors []string
+	var invalidErrors error
 
 	for _, id := range orderIDs {
 		o, ok := st.orders[id]
 		if !ok {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не найден", id))
+			invalidErrors = errors.Join(invalidErrors, fmt.Errorf("заказ %s не найден", id))
 			continue
 		}
 		if o.RecipientID != userID {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s принадлежит другому пользователю", id))
+			invalidErrors = errors.Join(invalidErrors, fmt.Errorf("заказ %s принадлежит другому пользователю", id))
 			continue
 		}
 		if o.CurrentState() != models.OrderStateAccepted {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не в состоянии 'accepted'", id))
+			invalidErrors = errors.Join(invalidErrors, fmt.Errorf("заказ %s не в состоянии 'accepted'", id))
 			continue
 		}
 		if time.Now().After(o.StorageDeadline) {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("срок хранения заказа %s истёк", id))
+			invalidErrors = errors.Join(invalidErrors, fmt.Errorf("срок хранения заказа %s истёк", id))
 			continue
 		}
 		validOrders = append(validOrders, o)
 	}
-	if len(invalidErrors) > 0 {
+	if invalidErrors != nil {
 		return nil, errors.New("валидация доставки не пройдена: " + fmt.Sprintf("%v", invalidErrors))
 	}
 	return validOrders, nil
@@ -181,23 +207,23 @@ func validateReturnOrder(o *models.Order, userID string) error {
 }
 
 func (st *OrderStorage) validateOrdersForReturn(userID string, orderIDs []string) ([]*models.Order, error) {
-	var validOrders []*models.Order
-	var invalidErrors []string
+	validOrders := make([]*models.Order, 0, len(orderIDs))
+	var invalidErrors error
 
 	for _, id := range orderIDs {
 		o, ok := st.orders[id]
 		if !ok {
-			invalidErrors = append(invalidErrors, fmt.Sprintf("заказ %s не найден", id))
+			invalidErrors = errors.Join(invalidErrors, fmt.Errorf("заказ %s не найден", id))
 			continue
 		}
 		if err := validateReturnOrder(o, userID); err != nil {
-			invalidErrors = append(invalidErrors, err.Error())
+			invalidErrors = errors.Join(invalidErrors, err)
 			continue
 		}
 		validOrders = append(validOrders, o)
 	}
-	if len(invalidErrors) > 0 {
-		return nil, fmt.Errorf("валидация возврата не пройдена: %s", strings.Join(invalidErrors, "; "))
+	if invalidErrors != nil {
+		return nil, errors.New("валидация возврата не пройдена: " + fmt.Sprintf("%v", invalidErrors))
 	}
 	return validOrders, nil
 }
