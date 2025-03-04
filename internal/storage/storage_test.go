@@ -18,7 +18,7 @@ func setupStorage(t *testing.T) *storage.OrderStorage {
 	_ = os.Remove(testFile)
 	err := os.WriteFile(testFile, []byte("[]"), 0644)
 	assert.NoError(t, err, "Не удалось создать тестовый файл с пустым JSON-массивом")
-	st, err := storage.New(testFile, packaging.NewPackagingService())
+	st, err := storage.New(testFile)
 	assert.NoError(t, err)
 	return st
 }

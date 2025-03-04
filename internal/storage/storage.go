@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"os"
 	"sort"
 	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
+	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 )
 
 type AcceptOrderFromCourierRequest struct {
@@ -24,14 +24,12 @@ type AcceptOrderFromCourierRequest struct {
 type OrderStorage struct {
 	orders   map[string]*models.Order
 	dataFile string
-	ps       packaging.PackagingService
 }
 
-func New(dataFile string, ps packaging.PackagingService) (*OrderStorage, error) {
+func New(dataFile string) (*OrderStorage, error) {
 	st := &OrderStorage{
 		orders:   make(map[string]*models.Order),
 		dataFile: dataFile,
-		ps:       ps,
 	}
 	if err := st.loadFromFile(); err != nil {
 		return st, err
@@ -92,33 +90,7 @@ func (st *OrderStorage) AcceptOrderFromCourier(req AcceptOrderFromCourierRequest
 		return errors.New("срок хранения уже истёк, не можем принять заказ")
 	}
 
-	var totalPackagingCost float64
-	var mainCount, filmCount int
-
-	for _, pt := range req.Packaging {
-		pkg, err := st.ps.GetPackaging(pt)
-		if err != nil {
-			return err
-		}
-		if err := pkg.Validate(req.Weight); err != nil {
-			return err
-		}
-		if pt == packaging.PackagingFilm {
-			filmCount++
-		} else {
-			mainCount++
-		}
-		totalPackagingCost += pkg.Cost()
-	}
-
-	if mainCount > 1 {
-		return errors.New("недопустимо использовать более одной основной упаковки (не film)")
-	}
-	if mainCount == 1 && filmCount > 1 {
-		return errors.New("к основной упаковке можно добавить не более одной пленки")
-	}
-
-	t := time.Now().UTC()
+	t := now()
 	order := &models.Order{
 		ID:              req.OrderID,
 		RecipientID:     req.RecipientID,
@@ -127,10 +99,7 @@ func (st *OrderStorage) AcceptOrderFromCourier(req AcceptOrderFromCourierRequest
 		LastStateChange: t,
 		Weight:          req.Weight,
 		Cost:            req.BaseCost,
-		Packaging:       make([]string, len(req.Packaging)),
-	}
-	for i, pt := range req.Packaging {
-		order.Packaging[i] = string(pt)
+		Packaging:       convertPackagingToStrings(req.Packaging),
 	}
 	order.UpdateState(models.OrderStateAccepted)
 	st.orders[req.OrderID] = order
@@ -138,6 +107,14 @@ func (st *OrderStorage) AcceptOrderFromCourier(req AcceptOrderFromCourierRequest
 		return fmt.Errorf("сбой при сохранении файла: %w", err)
 	}
 	return nil
+}
+
+func convertPackagingToStrings(pt []packaging.PackagingType) []string {
+	var res []string
+	for _, p := range pt {
+		res = append(res, string(p))
+	}
+	return res
 }
 
 func (st *OrderStorage) ReturnOrderToCourier(orderID string) error {
@@ -185,7 +162,7 @@ func (st *OrderStorage) validateOrdersForDelivery(userID string, orderIDs []stri
 		validOrders = append(validOrders, o)
 	}
 	if invalidErrors != nil {
-		return nil, errors.New("валидация доставки не пройдена: " + fmt.Sprintf("%v", invalidErrors))
+		return nil, fmt.Errorf("валидация доставки не пройдена:  %w", invalidErrors)
 	}
 	return validOrders, nil
 }
@@ -223,7 +200,7 @@ func (st *OrderStorage) validateOrdersForReturn(userID string, orderIDs []string
 		validOrders = append(validOrders, o)
 	}
 	if invalidErrors != nil {
-		return nil, errors.New("валидация возврата не пройдена: " + fmt.Sprintf("%v", invalidErrors))
+		return nil, fmt.Errorf("валидация возврата не пройдена: %w", invalidErrors)
 	}
 	return validOrders, nil
 }

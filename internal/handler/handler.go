@@ -4,47 +4,50 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
 	"gitlab.ozon.dev/qwestard/homework/internal/storage"
 )
 
-var ErrExit = errors.New("exit")
-
 type Command struct {
-	Name    string
-	Handler func([]string) error
+	Name        string
+	Description string
+	Handler     func([]string) error
 }
 
 type Handler struct {
 	st       *storage.OrderStorage
+	ps       packaging.PackagingService
 	commands []Command
 }
 
-func New(st *storage.OrderStorage) *Handler {
+var ErrExit = errors.New("exit")
+
+func New(st *storage.OrderStorage, ps packaging.PackagingService) (*Handler, error) {
 	h := &Handler{
 		st: st,
+		ps: ps,
 	}
 	h.initCommands()
-	return h
+	return h, nil
 }
 
 func (h *Handler) initCommands() {
 	h.commands = []Command{
-		{"help", h.printHelp},
-		{"exit", h.handleExit},
-		{"accept", h.handleAccept},
-		{"return_courier", h.handleReturnCourier},
-		{"deliver", h.handleDeliver},
-		{"clientreturn", h.handleClientReturn},
-		{"list", h.handleList},
-		{"returns", h.handleReturns},
-		{"history", h.handleHistory},
-		{"accept_from_courier", h.acceptOrdersFromCourier},
+		{"help", "выводит справку", h.printHelp},
+		{"exit", "завершает программу", h.handleExit},
+		{"accept", "принимает заказ от курьера. Формат: accept <orderID> <userID> <deadline RFC3339> <weight> <baseCost> [<packaging>]", h.handleAccept},
+		{"return_courier", "возвращает заказ курьеру", h.handleReturnCourier},
+		{"deliver", "выдает заказы клиенту", h.handleDeliver},
+		{"clientreturn", "принимает возврат от клиента", h.handleClientReturn},
+		{"list", "выводит список заказов пользователя", h.handleList},
+		{"returns", "выводит список возвратов с пагинацией", h.handleReturns},
+		{"history", "выводит историю заказов", h.handleHistory},
+		{"accept_from_courier", "принимает заказы из файла JSON", h.acceptOrdersFromCourier},
 	}
 }
 
@@ -58,83 +61,93 @@ func (h *Handler) Execute(cmd string, args []string) error {
 }
 
 func (h *Handler) printHelp([]string) error {
-	fmt.Println(`Доступные команды:
-  help
-    - выводит справку
-  exit
-    - завершает программу
-  accept <orderID> <userID> <deadline RFC3339> <packaging> <weight> <baseCost>
-    - принять заказ от курьера
-  return_courier <orderID>
-    - вернуть заказ курьеру (если заказ в состоянии accepted или clientreturn)
-  deliver <userID> <orderID1> [orderID2 ...]
-    - выдать заказы клиенту (перевод в delivered)
-  clientreturn <userID> <orderID1> [orderID2 ...]
-    - принять возврат от клиента (перевод в client_rtn)
-  list <userID> [lastN=0] [onlyInPVZ=false]
-    - список заказов пользователя
-  returns [pageIndex=1] [pageSize=10]
-    - список возвратов с пагинацией
-  history
-    - история заказов
-  accept_from_courier <filename>
-    - принять заказы из файла JSON (массив заказов)`)
+	fmt.Println("Доступные команды:")
+	for _, c := range h.commands {
+		fmt.Printf("  %s: %s\n", c.Name, c.Description)
+	}
 	return nil
 }
 
 func (h *Handler) handleExit([]string) error {
-	fmt.Println("Выход из приложения.")
 	return ErrExit
 }
 
-func (h *Handler) handleAccept(args []string) error {
-	if len(args) != 3 && len(args) != 6 {
-		return errors.New("формат: accept <orderID> <userID> <deadline RFC3339> [<packaging> <weight> <baseCost>]")
+func (h *Handler) parseAcceptOrderRequest(args []string) (storage.AcceptOrderFromCourierRequest, error) {
+	var req storage.AcceptOrderFromCourierRequest
+	if len(args) != 5 && len(args) != 6 {
+		return req, errors.New("формат: accept <orderID> <userID> <deadline RFC3339> <weight> <baseCost> [<packaging>]")
 	}
-	orderID := args[0]
-	userID := args[1]
-	deadlineStr := args[2]
-	deadline, err := time.Parse(time.RFC3339, deadlineStr)
+	req.OrderID = args[0]
+	req.RecipientID = args[1]
+	deadline, err := time.Parse(time.RFC3339, args[2])
 	if err != nil {
-		return fmt.Errorf("ошибка разбора даты: %w", err)
+		return req, fmt.Errorf("ошибка разбора даты: %w", err)
 	}
-
-	var packagingSlice []packaging.PackagingType
-	var weight, baseCost float64
+	req.Deadline = deadline
+	req.Weight, err = strconv.ParseFloat(args[3], 64)
+	if err != nil {
+		return req, fmt.Errorf("ошибка разбора веса: %w", err)
+	}
+	req.BaseCost, err = strconv.ParseFloat(args[4], 64)
+	if err != nil {
+		return req, fmt.Errorf("ошибка разбора базовой стоимости: %w", err)
+	}
 	if len(args) == 6 {
-		raw := strings.Split(args[3], "+")
+		raw := strings.Split(args[5], "+")
 		for _, s := range raw {
 			pt := packaging.PackagingType(strings.ToLower(strings.TrimSpace(s)))
-			packagingSlice = append(packagingSlice, pt)
-		}
-		weight, err = strconv.ParseFloat(args[4], 64)
-		if err != nil {
-			return fmt.Errorf("ошибка разбора веса: %w", err)
-		}
-		baseCost, err = strconv.ParseFloat(args[5], 64)
-		if err != nil {
-			return fmt.Errorf("ошибка разбора базовой стоимости: %w", err)
+			req.Packaging = append(req.Packaging, pt)
 		}
 	}
+	return req, nil
+}
 
-	req := storage.AcceptOrderFromCourierRequest{
-		OrderID:     orderID,
-		RecipientID: userID,
-		Deadline:    deadline,
-		Packaging:   packagingSlice,
-		Weight:      weight,
-		BaseCost:    baseCost,
+func (h *Handler) validatePackaging(req storage.AcceptOrderFromCourierRequest) error {
+	if len(req.Packaging) == 0 {
+		return nil
+	}
+	var mainCount, filmCount int
+	for _, pt := range req.Packaging {
+		pkg, err := h.ps.GetPackaging(pt)
+		if err != nil {
+			return err
+		}
+		if err := pkg.Validate(req.Weight); err != nil {
+			return err
+		}
+		if pt == packaging.PackagingFilm {
+			filmCount++
+		} else {
+			mainCount++
+		}
+	}
+	if mainCount > 1 {
+		return errors.New("недопустимо использовать более одной основной упаковки (не film)")
+	}
+	if mainCount == 1 && filmCount > 1 {
+		return errors.New("к основной упаковке можно добавить не более одной пленки")
+	}
+	return nil
+}
+
+func (h *Handler) handleAccept(args []string) error {
+	req, err := h.parseAcceptOrderRequest(args)
+	if err != nil {
+		return err
+	}
+	if err := h.validatePackaging(req); err != nil {
+		return fmt.Errorf("ошибка проверки упаковки: %w", err)
 	}
 	err = h.st.AcceptOrderFromCourier(req)
 	if err != nil {
-		return fmt.Errorf("ошибка accept: %w", err)
+		return err
 	}
-	if len(packagingSlice) > 0 {
+	if len(req.Packaging) > 0 {
 		fmt.Printf("Заказ %s принят для пользователя %s (deadline=%s, упаковка=%v, вес=%.2f, базовая стоимость=%.2f)\n",
-			orderID, userID, deadline, packagingSlice, weight, baseCost)
+			req.OrderID, req.RecipientID, req.Deadline, req.Packaging, req.Weight, req.BaseCost)
 	} else {
 		fmt.Printf("Заказ %s принят для пользователя %s (deadline=%s)\n",
-			orderID, userID, deadline)
+			req.OrderID, req.RecipientID, req.Deadline)
 	}
 	return nil
 }
@@ -288,7 +301,6 @@ func (h *Handler) acceptOrdersFromCourier(args []string) error {
 			continue
 		}
 		var packagingSlice []packaging.PackagingType
-
 		for _, s := range o.Packaging {
 			pt := packaging.PackagingType(strings.ToLower(strings.TrimSpace(s)))
 			packagingSlice = append(packagingSlice, pt)
