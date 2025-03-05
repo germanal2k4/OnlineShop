@@ -20,6 +20,9 @@ type Order struct {
 	ReturnedAt      time.Time `json:"returned_at,omitempty"`
 	ClientReturnAt  time.Time `json:"client_return_at,omitempty"`
 	LastStateChange time.Time `json:"last_state_change"`
+	Weight          float64   `json:"weight"`
+	Cost            float64   `json:"cost"`
+	Packaging       []string  `json:"packaging"`
 }
 
 func (o *Order) UpdateState(newState OrderState) {
