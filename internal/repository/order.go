@@ -32,7 +32,6 @@ func (r *OrderRepository) Create(o *models.Order) error {
 	return nil
 }
 
-// GetByID — возвращает заказ по ID.
 func (r *OrderRepository) GetByID(id string) (*models.Order, error) {
 	query := `SELECT 
 			id, recipient_id, storage_deadline, 

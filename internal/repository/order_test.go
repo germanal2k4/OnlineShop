@@ -51,11 +51,9 @@ func TestCreateAndGetByID(t *testing.T) {
 		Cost:            100.0,
 		Packaging:       []string{"box"},
 	}
-	// 1. Create
 	err := repo.Create(order)
 	assert.NoError(t, err, "Создание заказа не должно падать")
 
-	// 2. GetByID
 	o2, err := repo.GetByID("test-order-123")
 	assert.NoError(t, err)
 	assert.NotNil(t, o2)
@@ -64,7 +62,6 @@ func TestCreateAndGetByID(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	// Создаём новый заказ
 	o := &models.Order{
 		ID:              "test-order-999",
 		RecipientID:     "initialUser",
@@ -74,13 +71,11 @@ func TestUpdate(t *testing.T) {
 	err := repo.Create(o)
 	assert.NoError(t, err)
 
-	// Меняем поля
 	o.RecipientID = "updatedUser"
 	o.Weight = 5.0
 	err = repo.Update(o)
 	assert.NoError(t, err)
 
-	// Считываем снова
 	o2, err := repo.GetByID("test-order-999")
 	assert.NoError(t, err)
 	assert.NotNil(t, o2)
@@ -96,11 +91,9 @@ func TestDelete(t *testing.T) {
 	err := repo.Create(o)
 	assert.NoError(t, err)
 
-	// Удаляем
 	err = repo.Delete("test-delete-1")
 	assert.NoError(t, err)
 
-	// Проверяем, что теперь нет
 	o2, err := repo.GetByID("test-delete-1")
 	assert.NoError(t, err)
 	assert.Nil(t, o2)
