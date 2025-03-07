@@ -1,54 +1,33 @@
 package main
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
+	"log"
 	"os"
-	"strings"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/handler"
-	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
-	"gitlab.ozon.dev/qwestard/homework/internal/storage"
+	"gitlab.ozon.dev/qwestard/homework/internal/config"
+	"gitlab.ozon.dev/qwestard/homework/internal/db"
+	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"gitlab.ozon.dev/qwestard/homework/internal/server"
 )
 
-const storageFile = "orders.json"
-
 func main() {
-	ps := packaging.NewPackagingService()
-
-	st, err := storage.New(storageFile)
-	if err != nil {
-		fmt.Printf("Ошибка при создании хранилища: %v\n", err)
-		os.Exit(1)
+	cfg := config.LoadConfig()
+	migrationsDir := "migrations"
+	if _, err := os.Stat(migrationsDir); os.IsNotExist(err) {
+		log.Fatalf("Нет папки с миграциями: %s", migrationsDir)
 	}
 
-	h, err := handler.New(st, ps)
+	database, err := db.NewDB(cfg.DSN, migrationsDir)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к БД: %v", err)
+	}
+	defer database.Close()
 
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("\n> ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Printf("Ошибка чтения: %v\n", err)
-			continue
-		}
+	repo := repository.NewOrderRepository(database)
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	srv := server.NewServer(repo, cfg.Username, cfg.Password, cfg.Addr())
 
-		parts := strings.Fields(line)
-		cmd := parts[0]
-		args := parts[1:]
-		err = h.Execute(cmd, args)
-		if err != nil {
-			if errors.Is(err, handler.ErrExit) {
-				fmt.Println("Выход из приложения.")
-				break
-			}
-			fmt.Printf("Ошибка выполнения команды: %v\n", err)
-		}
+	if err := srv.Run(); err != nil {
+		log.Fatalf("Сервер упал: %v", err)
 	}
 }

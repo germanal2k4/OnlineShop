@@ -54,7 +54,7 @@ func (p BoxPackaging) Type() PackagingType {
 
 type FilmPackaging struct{}
 
-func (p FilmPackaging) Validate(weight float64) error {
+func (p FilmPackaging) Validate(float64) error {
 	return nil
 }
 

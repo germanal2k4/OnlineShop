@@ -1,26 +1,22 @@
-.PHONY: deps build run lint install-tools all
+.PHONY: install-tools migrate-up migrate-down build run
 
-GOBIN := $(CURDIR)/bin
-export GOBIN
-
-deps:
-	@echo "Обновление зависимостей..."
-	go mod tidy
+DSN ?= "host=localhost user=postgres password=postgres dbname=orders sslmode=disable"
+MIGRATIONS_DIR := migrations
 
 install-tools:
-	@echo "Установка golangci-lint..."
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Устанавливаем goose..."
+	go install github.com/pressly/goose/v3/cmd/goose@latest
 
-lint: install-tools
-	@echo "Запуск линтеров..."
-	@$(GOBIN)/golangci-lint run
+migrate-up:
+	@echo "Накатываем миграции..."
+	goose -dir=$(MIGRATIONS_DIR) postgres $(DSN) up
 
-build: deps
-	@echo "Сборка проекта..."
-	@go build -o $(GOBIN)/myapp ./cmd
+migrate-down:
+	@echo "Откатываем миграции..."
+	goose -dir=$(MIGRATIONS_DIR) postgres $(DSN) down
+
+build:
+	go build -o myapp ./cmd
 
 run: build
-	@echo "Запуск приложения..."
-	@$(GOBIN)/myapp
-
-all: lint build run
+	./myapp
