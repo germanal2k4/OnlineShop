@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,57 +18,126 @@ func NewOrderRepository(db *sql.DB) *OrderRepository {
 }
 
 func (r *OrderRepository) Create(o *models.Order) error {
-	query := `INSERT INTO orders (
-			id, recipient_id, storage_deadline, accepted_at, delivered_at, 
-			returned_at, client_return_at, last_state_change, weight, cost, packaging
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
-	_, err := r.db.Exec(query,
-		o.ID, o.RecipientID, o.StorageDeadline, o.AcceptedAt, o.DeliveredAt,
-		o.ReturnedAt, o.ClientReturnAt, o.LastStateChange, o.Weight, o.Cost, pqStringArray(o.Packaging),
+	query := `INSERT INTO orders (
+		id, recipient_id, storage_deadline, accepted_at, delivered_at,
+		returned_at, client_return_at, last_state_change, weight, cost
+	) VALUES ($1,
+	          $2,
+	          $3,
+	          $4,
+	          $5,
+	          $6,
+	          $7,
+	          $8,
+	          $9,
+	          $10)`
+
+	_, err = tx.Exec(query,
+		o.ID,
+		o.RecipientID,
+		o.StorageDeadline,
+		o.AcceptedAt,
+		o.DeliveredAt,
+		o.ReturnedAt,
+		o.ClientReturnAt,
+		o.LastStateChange,
+		o.Weight,
+		o.Cost,
 	)
 	if err != nil {
-		return fmt.Errorf("create order: %w", err)
+		return fmt.Errorf("create orders: %w", err)
+	}
+
+	if err := insertPackaging(tx, o.ID, o.Packaging); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func insertPackaging(tx *sql.Tx, orderID string, packaging []string) error {
+	for _, pkg := range packaging {
+		q := `INSERT INTO order_packaging(order_id, pkg_value) VALUES($1,$2)`
+		if _, err := tx.Exec(q, orderID, pkg); err != nil {
+			return fmt.Errorf("insertPackaging: %w", err)
+		}
 	}
 	return nil
 }
 
 func (r *OrderRepository) GetByID(id string) (*models.Order, error) {
-	query := `SELECT 
-			id, recipient_id, storage_deadline, 
-			accepted_at, delivered_at, returned_at, client_return_at, last_state_change,
-			weight, cost, packaging
-		FROM orders WHERE id=$1`
-
-	row := r.db.QueryRow(query, id)
 	o := &models.Order{}
-	var packaging []string
-
+	query := `SELECT
+		id, recipient_id, storage_deadline,
+		accepted_at, delivered_at, returned_at, client_return_at,
+		last_state_change, weight, cost
+	FROM orders WHERE id=$1`
+	row := r.db.QueryRow(query, id)
 	err := row.Scan(
 		&o.ID, &o.RecipientID, &o.StorageDeadline,
-		&o.AcceptedAt, &o.DeliveredAt, &o.ReturnedAt, &o.ClientReturnAt, &o.LastStateChange,
-		&o.Weight, &o.Cost, &packaging,
+		&o.AcceptedAt, &o.DeliveredAt, &o.ReturnedAt, &o.ClientReturnAt,
+		&o.LastStateChange, &o.Weight, &o.Cost,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("get order by id: %w", err)
+	if err != nil || row.Err() != nil {
+		return nil, fmt.Errorf("GetByID: %w", err)
 	}
-	o.Packaging = packaging
+	pkgs, err := r.fetchPackaging(id)
+	if err != nil {
+		return nil, err
+	}
+	o.Packaging = pkgs
 	return o, nil
 }
 
+func (r *OrderRepository) fetchPackaging(orderID string) ([]string, error) {
+	var result []string
+	rows, err := r.db.Query(`SELECT pkg_value FROM order_packaging WHERE order_id=$1`, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("fetchPackaging: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		if rows.Err() != nil {
+			return nil, rows.Err()
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
 func (r *OrderRepository) Update(o *models.Order) error {
-	query := `UPDATE orders SET 
-			recipient_id=$1, storage_deadline=$2,
-			accepted_at=$3, delivered_at=$4, returned_at=$5, client_return_at=$6, last_state_change=$7,
-			weight=$8, cost=$9, packaging=$10
-		WHERE id=$11`
-	res, err := r.db.Exec(query,
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	query := `UPDATE orders SET
+		recipient_id=$1, storage_deadline=$2,
+		accepted_at=$3, delivered_at=$4,
+		returned_at=$5, client_return_at=$6,
+		last_state_change=$7, weight=$8, cost=$9
+	WHERE id=$10`
+	res, err := tx.Exec(query,
 		o.RecipientID, o.StorageDeadline,
-		o.AcceptedAt, o.DeliveredAt, o.ReturnedAt, o.ClientReturnAt, o.LastStateChange,
-		o.Weight, o.Cost, pqStringArray(o.Packaging),
+		o.AcceptedAt, o.DeliveredAt,
+		o.ReturnedAt, o.ClientReturnAt,
+		o.LastStateChange, o.Weight, o.Cost,
 		o.ID,
 	)
 	if err != nil {
@@ -77,12 +147,18 @@ func (r *OrderRepository) Update(o *models.Order) error {
 	if n == 0 {
 		return fmt.Errorf("order %s not found", o.ID)
 	}
-	return nil
+
+	if _, err := tx.Exec(`DELETE FROM order_packaging WHERE order_id=$1`, o.ID); err != nil {
+		return fmt.Errorf("delete packaging: %w", err)
+	}
+	if err := insertPackaging(tx, o.ID, o.Packaging); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *OrderRepository) Delete(id string) error {
-	query := `DELETE FROM orders WHERE id=$1`
-	res, err := r.db.Exec(query, id)
+	res, err := r.db.Exec(`DELETE FROM orders WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("delete order: %w", err)
 	}
@@ -93,56 +169,103 @@ func (r *OrderRepository) Delete(id string) error {
 	return nil
 }
 
+func (r *OrderRepository) Deliver(id string) error {
+	o, err := r.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return fmt.Errorf("order %s not found", id)
+	}
+	o.UpdateState(models.OrderStateDelivered)
+	return r.Update(o)
+}
+
+func (r *OrderRepository) ClientReturn(id string) error {
+	o, err := r.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return fmt.Errorf("order %s not found", id)
+	}
+	o.UpdateState(models.OrderStateClientRtn)
+	return r.Update(o)
+}
+
+func (r *OrderRepository) GetReturns(offset int64, limit int64) ([]*models.Order, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var b strings.Builder
+	b.WriteString(`SELECT id FROM orders WHERE client_return_at IS NOT NULL`)
+	b.WriteString(` ORDER BY id ASC`)
+	b.WriteString(` LIMIT $1 OFFSET $2`)
+
+	rows, err := r.db.Query(b.String(), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("GetReturns: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*models.Order
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if rows.Err() != nil {
+			return nil, rows.Err()
+		}
+		o, err := r.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, o)
+	}
+	return result, nil
+}
+
 func (r *OrderRepository) List(cursor string, limit int64) ([]*models.Order, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	var filters []string
-	var args []interface{}
-	idx := 1
-
-	query := `SELECT 
-			id, recipient_id, storage_deadline,
-			accepted_at, delivered_at, returned_at, client_return_at, last_state_change,
-			weight, cost, packaging
-		FROM orders`
+	var sb strings.Builder
+	sb.WriteString(`SELECT id FROM orders`)
 	if cursor != "" {
-		filters = append(filters, fmt.Sprintf("id>$%d", idx))
-		args = append(args, cursor)
-		idx++
+		sb.WriteString(` WHERE id > $1`)
+		sb.WriteString(` ORDER BY id ASC LIMIT $2`)
+	} else {
+		sb.WriteString(` ORDER BY id ASC LIMIT $1`)
 	}
-	if len(filters) > 0 {
-		query += " WHERE " + strings.Join(filters, " AND ")
-	}
-	st := ` ORDER BY id ASC`
-	query += st
-	query += fmt.Sprintf(" LIMIT $%d", idx)
-	args = append(args, limit)
+	query := sb.String()
 
-	rows, err := r.db.Query(query, args...)
+	var rows *sql.Rows
+	var err error
+	if cursor != "" {
+		rows, err = r.db.Query(query, cursor, limit)
+	} else {
+		rows, err = r.db.Query(query, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list orders: %w", err)
 	}
 	defer rows.Close()
 
-	var res []*models.Order
+	var orders []*models.Order
 	for rows.Next() {
-		o := &models.Order{}
-		var packaging []string
-		err := rows.Scan(
-			&o.ID, &o.RecipientID, &o.StorageDeadline,
-			&o.AcceptedAt, &o.DeliveredAt, &o.ReturnedAt, &o.ClientReturnAt, &o.LastStateChange,
-			&o.Weight, &o.Cost, &packaging,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scan order: %w", err)
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
 		}
-		o.Packaging = packaging
-		res = append(res, o)
+		if rows.Err() != nil {
+			return nil, rows.Err()
+		}
+		o, err := r.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
 	}
-	return res, nil
-}
-
-func pqStringArray(a []string) interface{} {
-	return a
+	return orders, nil
 }

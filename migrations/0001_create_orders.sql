@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE IF NOT EXISTS orders (
+CREATE TABLE orders (
     id TEXT PRIMARY KEY,
     recipient_id TEXT NOT NULL,
     storage_deadline TIMESTAMPTZ NOT NULL,
@@ -11,10 +11,18 @@ CREATE TABLE IF NOT EXISTS orders (
     last_state_change TIMESTAMPTZ NOT NULL,
 
     weight DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cost DOUBLE PRECISION NOT NULL DEFAULT 0
+);
 
-    packaging TEXT[] NOT NULL DEFAULT '{}'
+CREATE TABLE order_packaging (
+    order_id TEXT NOT NULL,
+    pkg_value TEXT NOT NULL,
+    CONSTRAINT order_packaging_pk PRIMARY KEY (order_id, pkg_value),
+    CONSTRAINT order_packaging_fk FOREIGN KEY (order_id)
+    REFERENCES orders(id)
+    ON DELETE CASCADE
 );
 
 -- +goose Down
-DROP TABLE IF EXISTS orders;
+DROP TABLE order_packaging;
+DROP TABLE orders;

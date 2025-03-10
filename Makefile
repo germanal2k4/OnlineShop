@@ -18,5 +18,8 @@ migrate-down:
 build:
 	go build -o myapp ./cmd
 
+test:
+	go test ./... -v
+
 run: build
 	./myapp

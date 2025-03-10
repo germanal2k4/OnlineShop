@@ -13,28 +13,19 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
-	dsn := os.Getenv("APP_DSN")
-	if dsn == "" {
-		dsn = "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"
-	}
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "9000"
-	}
-	user := os.Getenv("APP_USER")
-	if user == "" {
-		user = "admin"
-	}
-	pass := os.Getenv("APP_PASS")
-	if pass == "" {
-		pass = "secret"
-	}
 	return &Config{
-		DSN:      dsn,
-		HTTPPort: port,
-		Username: user,
-		Password: pass,
+		DSN:      getEnv("APP_DSN", "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"),
+		HTTPPort: getEnv("APP_PORT", "9000"),
+		Username: getEnv("APP_USER", "admin"),
+		Password: getEnv("APP_PASS", "secret"),
 	}
+}
+
+func getEnv(key, defaultVal string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultVal
 }
 
 func (c *Config) Addr() string {
