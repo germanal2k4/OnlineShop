@@ -1,6 +1,6 @@
 .PHONY: install-tools migrate-up migrate-down build run
 
-DSN ?= "host=localhost user=postgres password=postgres dbname=orders sslmode=disable"
+DSN ?= "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"
 MIGRATIONS_DIR := migrations
 
 install-tools:
