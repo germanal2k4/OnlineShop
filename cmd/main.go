@@ -1,54 +1,28 @@
 package main
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
-	"os"
-	"strings"
+	"log"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/handler"
-	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
-	"gitlab.ozon.dev/qwestard/homework/internal/storage"
+	"gitlab.ozon.dev/qwestard/homework/internal/config"
+	"gitlab.ozon.dev/qwestard/homework/internal/db"
+	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"gitlab.ozon.dev/qwestard/homework/internal/server"
 )
 
-const storageFile = "orders.json"
-
 func main() {
-	ps := packaging.NewPackagingService()
+	cfg := config.LoadConfig()
 
-	st, err := storage.New(storageFile)
+	database, err := db.NewDB(cfg.DSN)
 	if err != nil {
-		fmt.Printf("Ошибка при создании хранилища: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("Error in connection to db: %v", err)
 	}
+	defer database.Close()
 
-	h, err := handler.New(st, ps)
+	repo := repository.NewOrderRepository(database)
 
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("\n> ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Printf("Ошибка чтения: %v\n", err)
-			continue
-		}
+	srv := server.NewServer(repo, cfg)
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Fields(line)
-		cmd := parts[0]
-		args := parts[1:]
-		err = h.Execute(cmd, args)
-		if err != nil {
-			if errors.Is(err, handler.ErrExit) {
-				fmt.Println("Выход из приложения.")
-				break
-			}
-			fmt.Printf("Ошибка выполнения команды: %v\n", err)
-		}
+	if err := srv.Run(); err != nil {
+		log.Fatalf("Server stopped: %v", err)
 	}
 }

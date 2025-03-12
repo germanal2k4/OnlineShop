@@ -1,0 +1,11 @@
+version: '3.7'
+services:
+  db:
+    image: postgres:14
+    container_name: local-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pickups
+    ports:
+      - "5432:5432"
