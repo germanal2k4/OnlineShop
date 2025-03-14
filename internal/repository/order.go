@@ -9,6 +9,17 @@ import (
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
 )
 
+type Repository interface {
+	Create(o *models.Order) error
+	List(cursor string, limit int64, recipientID string) ([]*models.Order, error)
+	GetByID(id string) (*models.Order, error)
+	Update(o *models.Order) error
+	Delete(id string) error
+	Deliver(id string) error
+	ClientReturn(id string) error
+	GetReturns(offset, limit int64, recipientID string) ([]*models.Order, error)
+}
+
 type OrderRepository struct {
 	db *sql.DB
 }
@@ -193,16 +204,28 @@ func (r *OrderRepository) ClientReturn(id string) error {
 	return r.Update(o)
 }
 
-func (r *OrderRepository) GetReturns(offset int64, limit int64) ([]*models.Order, error) {
+func (r *OrderRepository) GetReturns(offset int64, limit int64, recipientID string) ([]*models.Order, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+
 	var b strings.Builder
 	b.WriteString(`SELECT id FROM orders WHERE client_return_at IS NOT NULL`)
-	b.WriteString(` ORDER BY id ASC`)
-	b.WriteString(` LIMIT $1 OFFSET $2`)
 
-	rows, err := r.db.Query(b.String(), limit, offset)
+	if recipientID != "" {
+		b.WriteString(` AND recipient_id = $3`)
+	}
+
+	b.WriteString(` ORDER BY id ASC LIMIT $1 OFFSET $2`)
+
+	var args []interface{}
+	args = append(args, limit, offset)
+
+	if recipientID != "" {
+		args = append(args, recipientID)
+	}
+
+	rows, err := r.db.Query(b.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("GetReturns: %w", err)
 	}
@@ -226,27 +249,34 @@ func (r *OrderRepository) GetReturns(offset int64, limit int64) ([]*models.Order
 	return result, nil
 }
 
-func (r *OrderRepository) List(cursor string, limit int64) ([]*models.Order, error) {
+func (r *OrderRepository) List(cursor string, limit int64, recipientID string) ([]*models.Order, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+
 	var sb strings.Builder
+	args := []interface{}{limit}
+
 	sb.WriteString(`SELECT id FROM orders`)
 	if cursor != "" {
-		sb.WriteString(` WHERE id > $1`)
-		sb.WriteString(` ORDER BY id ASC LIMIT $2`)
-	} else {
-		sb.WriteString(` ORDER BY id ASC LIMIT $1`)
+		sb.WriteString(` WHERE id > $2`)
+		args = append(args, cursor)
 	}
+
+	if recipientID != "" {
+		if strings.Contains(sb.String(), "WHERE") {
+			sb.WriteString(` AND recipient_id = $1`)
+		} else {
+			sb.WriteString(` WHERE recipient_id = $1`)
+		}
+		args = append([]interface{}{recipientID}, args...)
+	}
+
+	sb.WriteString(` ORDER BY id ASC LIMIT $1`)
+
 	query := sb.String()
 
-	var rows *sql.Rows
-	var err error
-	if cursor != "" {
-		rows, err = r.db.Query(query, cursor, limit)
-	} else {
-		rows, err = r.db.Query(query, limit)
-	}
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list orders: %w", err)
 	}

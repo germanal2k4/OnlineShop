@@ -4,161 +4,183 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
 	_ "github.com/lib/pq"
+
 	"github.com/pressly/goose/v3"
+
 	"github.com/stretchr/testify/assert"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/config"
+	"gitlab.ozon.dev/qwestard/homework/internal/models"
 	"gitlab.ozon.dev/qwestard/homework/internal/repository"
 	"gitlab.ozon.dev/qwestard/homework/internal/server"
 )
 
 var (
-	db         *sql.DB
-	testServer *httptest.Server
+	db           *sql.DB
+	testServer   *httptest.Server
+	testUsername string
+	testPassword string
 )
 
 func TestMain(m *testing.M) {
 	cfg := config.LoadConfig()
 
+	testUsername = cfg.Username
+	testPassword = cfg.Password
+
 	var err error
 	db, err = sql.Open("postgres", cfg.DSN)
 	if err != nil {
-		log.Fatalf("open db error: %v", err)
+		log.Fatalf("sql.Open error: %v", err)
 	}
 	if err = db.Ping(); err != nil {
-		log.Fatalf("ping db error: %v", err)
+		log.Fatalf("db.Ping error: %v", err)
 	}
 
 	if err := goose.Up(db, "../migrations"); err != nil {
-		log.Fatalf("goose up error: %v", err)
+		log.Fatalf("goose.Up error: %v", err)
 	}
 
 	repo := repository.NewOrderRepository(db)
 	srv := server.NewServer(repo, cfg)
 
-	if err := srv.Run(); err != nil {
-		log.Fatalf("Server stopped: %v", err)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	testServer = httptest.NewServer(mux)
+
+	if _, err := db.Exec("TRUNCATE orders CASCADE"); err != nil {
+		log.Printf("truncate error: %v", err)
 	}
 
-	_, _ = db.Exec("TRUNCATE orders CASCADE")
+	m.Run()
 
 	testServer.Close()
 	_ = db.Close()
 }
 
-func TestAcceptOrder(t *testing.T) {
-	order := models.Order{
-		ID:              "int-accept-1",
-		RecipientID:     "userA",
-		StorageDeadline: time.Now().Add(2 * time.Hour),
-		Weight:          5,
-		Cost:            100,
-	}
-	resp, body := doRequest(t, http.MethodPost, "/orders", order)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
-	assert.Contains(t, string(body), "int-accept-1")
-}
-
-func TestAcceptOrder_Duplicate(t *testing.T) {
-	order := models.Order{
-		ID:              "int-dup-1",
-		RecipientID:     "userD",
-		StorageDeadline: time.Now().Add(3 * time.Hour),
-	}
-	doRequest(t, http.MethodPost, "/orders", order)
-	resp2, body2 := doRequest(t, http.MethodPost, "/orders", order)
-	assert.True(t, resp2.StatusCode == http.StatusConflict || resp2.StatusCode == http.StatusBadRequest)
-	t.Logf("Body: %s", string(body2))
-}
-
-func TestAcceptOrder_DeadlinePast(t *testing.T) {
-	order := models.Order{
-		ID:              "int-past-1",
-		RecipientID:     "userP",
-		StorageDeadline: time.Now().Add(-1 * time.Hour),
-	}
-	resp, _ := doRequest(t, http.MethodPost, "/orders", order)
-	assert.True(t, resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusBadRequest)
-}
-
-func TestDeliverOrder(t *testing.T) {
-	order := models.Order{
-		ID:              "int-deliv-1",
-		RecipientID:     "userX",
-		StorageDeadline: time.Now().Add(2 * time.Hour),
-	}
-	doRequest(t, http.MethodPost, "/orders", order)
-	resp, _ := doRequest(t, http.MethodPut, "/orders-deliver/int-deliv-1", nil)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestClientReturn(t *testing.T) {
-	order := models.Order{
-		ID:              "int-return-1",
-		RecipientID:     "userR",
-		StorageDeadline: time.Now().Add(2 * time.Hour),
-	}
-	doRequest(t, http.MethodPost, "/orders", order)
-	doRequest(t, http.MethodPut, "/orders-deliver/int-return-1", nil)
-	resp, _ := doRequest(t, http.MethodPut, "/orders-return/int-return-1", nil)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestGetReturns(t *testing.T) {
-	order := models.Order{
-		ID:              "int-returns-1",
-		RecipientID:     "userZ",
-		StorageDeadline: time.Now().Add(2 * time.Hour),
-	}
-	doRequest(t, http.MethodPost, "/orders", order)
-	doRequest(t, http.MethodPut, "/orders-deliver/int-returns-1", nil)
-	doRequest(t, http.MethodPut, "/orders-return/int-returns-1", nil)
-
-	resp, body := doRequest(t, http.MethodGet, "/returns?offset=0&limit=5", nil)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var list []models.Order
-	if err := json.Unmarshal(body, &list); err != nil {
-		t.Fatalf("json decode error: %v", err)
-	}
-	assert.Len(t, list, 1)
-	assert.Equal(t, "int-returns-1", list[0].ID)
-}
-
 func doRequest(t *testing.T, method, path string, body interface{}) (*http.Response, []byte) {
+	t.Helper()
+
 	var reqBody []byte
+	var err error
 	if body != nil {
-		b, err := json.Marshal(body)
+		reqBody, err = json.Marshal(body)
 		if err != nil {
-			t.Fatalf("json marshal: %v", err)
+			t.Fatalf("json.Marshal error: %v", err)
 		}
-		reqBody = b
 	}
+
 	req, err := http.NewRequest(method, testServer.URL+path, bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("http.NewRequest: %v", err)
 	}
-	if reqBody != nil {
+
+	req.SetBasicAuth(testUsername, testPassword)
+
+	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("client.Do: %v", err)
 	}
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	return resp, bodyBytes
+	return resp, respBody
+}
+
+func TestCreateOrderIntegration(t *testing.T) {
+	order := models.Order{
+		ID:              "test-integration-create-1",
+		RecipientID:     "user001",
+		StorageDeadline: time.Now().Add(2 * time.Hour),
+		Weight:          5,
+		Cost:            99,
+	}
+
+	resp, body := doRequest(t, http.MethodPost, "/orders", order)
+
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var got models.Order
+	err := json.Unmarshal(body, &got)
+	assert.NoError(t, err)
+	assert.Equal(t, order.ID, got.ID)
+}
+
+func TestCreateOrderWrongDeadline(t *testing.T) {
+	order := models.Order{
+		ID:              "test-integration-wrong-deadline",
+		RecipientID:     "user002",
+		StorageDeadline: time.Now().Add(-time.Hour),
+	}
+
+	resp, _ := doRequest(t, http.MethodPost, "/orders", order)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestListOrdersIntegration(t *testing.T) {
+	for i := 1; i <= 2; i++ {
+		order := models.Order{
+			ID:              "test-list-" + strconv.Itoa(i),
+			RecipientID:     "userL" + strconv.Itoa(i),
+			StorageDeadline: time.Now().Add(2 * time.Hour),
+		}
+		doRequest(t, http.MethodPost, "/orders", order)
+	}
+
+	resp, body := doRequest(t, http.MethodGet, "/orders?cursor=&limit=10", nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var orders []models.Order
+	err := json.Unmarshal(body, &orders)
+	assert.NoError(t, err)
+	assert.True(t, len(orders) >= 2, "expected at least 2 orders")
+}
+
+func TestUpdateOrderIntegration(t *testing.T) {
+	order := models.Order{
+		ID:              "test-update-1",
+		RecipientID:     "userUp",
+		StorageDeadline: time.Now().Add(2 * time.Hour),
+	}
+	doRequest(t, http.MethodPost, "/orders", order)
+
+	order.Weight = 123
+	resp, body := doRequest(t, http.MethodPut, "/orders/test-update-1", order)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var updated models.Order
+	json.Unmarshal(body, &updated)
+	assert.Equal(t, float64(123), updated.Weight)
+}
+
+func TestDeleteOrderIntegration(t *testing.T) {
+	order := models.Order{
+		ID:              "test-delete-1",
+		RecipientID:     "userDel",
+		StorageDeadline: time.Now().Add(2 * time.Hour),
+	}
+	doRequest(t, http.MethodPost, "/orders", order)
+
+	resp, _ := doRequest(t, http.MethodDelete, "/orders/test-delete-1", nil)
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	resp2, _ := doRequest(t, http.MethodGet, "/orders/test-delete-1", nil)
+	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
 }

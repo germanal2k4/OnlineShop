@@ -23,6 +23,6 @@ func main() {
 	srv := server.NewServer(repo, cfg)
 
 	if err := srv.Run(); err != nil {
-		log.Fatalf("Server stopped: %v", err)
+		log.Fatalf("Server stopped with error: %v", err)
 	}
 }

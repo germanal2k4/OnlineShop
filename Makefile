@@ -1,4 +1,4 @@
-.PHONY: install-tools migrate-up migrate-down build run
+.PHONY: install-tools create-db migrate-up migrate-down build run
 
 DSN ?= "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"
 MIGRATIONS_DIR := migrations
@@ -6,6 +6,10 @@ MIGRATIONS_DIR := migrations
 install-tools:
 	@echo "Устанавливаем goose..."
 	go install github.com/pressly/goose/v3/cmd/goose@latest
+
+create-db:
+	@echo "Создаем бд"
+	docker-compose up -d
 
 migrate-up:
 	@echo "Накатываем миграции..."

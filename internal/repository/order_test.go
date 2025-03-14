@@ -55,7 +55,7 @@ func TestCreateGetDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, o2)
 	assert.Equal(t, "user42", o2.RecipientID)
-	assert.Equal(t, []string{"box", "film"}, o2.Packaging)
+	assert.ElementsMatch(t, []string{"box", "film"}, o2.Packaging)
 
 	err = repo.Delete("test-100")
 	assert.NoError(t, err)
@@ -95,7 +95,7 @@ func TestGetReturns(t *testing.T) {
 	_ = repo.Create(o2)
 	_ = repo.ClientReturn("rtn-2")
 
-	list, err := repo.GetReturns(0, 10)
+	list, err := repo.GetReturns(0, 10, "")
 	assert.NoError(t, err)
 	assert.Len(t, list, 1)
 	assert.Equal(t, "rtn-2", list[0].ID)

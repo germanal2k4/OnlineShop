@@ -15,13 +15,13 @@ import (
 )
 
 type Server struct {
-	repo     *repository.OrderRepository
+	repo     repository.Repository
 	user     string
 	password string
 	addr     string
 }
 
-func NewServer(repo *repository.OrderRepository, cfg *config.Config) *Server {
+func NewServer(repo repository.Repository, cfg *config.Config) *Server {
 	return &Server{
 		repo:     repo,
 		user:     cfg.Username,
@@ -30,8 +30,7 @@ func NewServer(repo *repository.OrderRepository, cfg *config.Config) *Server {
 	}
 }
 
-func (s *Server) Run() error {
-	mux := http.NewServeMux()
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	s.handleWith(mux, "/orders", s.handleOrders,
 		[]string{"POST"}, []string{"POST"},
@@ -51,6 +50,12 @@ func (s *Server) Run() error {
 	)
 
 	mux.HandleFunc("/returns", s.handleGetReturns)
+}
+
+func (s *Server) Run() error {
+	mux := http.NewServeMux()
+
+	s.RegisterRoutes(mux)
 
 	log.Printf("Server listen on %s...", s.addr)
 	return http.ListenAndServe(s.addr, mux)
@@ -122,7 +127,9 @@ func (s *Server) handleListOrders(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		limit = 10
 	}
-	orders, err := s.repo.List(cursor, limit)
+	recipientID := q.Get("recipient_id")
+
+	orders, err := s.repo.List(cursor, limit, recipientID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -203,8 +210,9 @@ func (s *Server) handleGetReturns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	offset, _ := strconv.ParseInt(q.Get("offset"), 10, 64)
 	limit, _ := strconv.ParseInt(q.Get("limit"), 10, 64)
+	recipientID := q.Get("recipient_id")
 
-	orders, err := s.repo.GetReturns(offset, limit)
+	orders, err := s.repo.GetReturns(offset, limit, recipientID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
