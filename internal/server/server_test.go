@@ -129,27 +129,19 @@ func (r *fakeRepo) GetReturns(_, _ int64, _ string) ([]*models.Order, error) {
 
 var _ repository.Repository = (*fakeRepo)(nil)
 
-func newTestConfig() *config.Config {
-	return &config.Config{
-		HTTPPort: "8080",
-		Username: "testuser",
-		Password: "testpass",
-	}
-}
-
 func createTestMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
-	s.handleWith(mux, "/orders", s.handleOrders, []string{"POST"}, []string{"POST"})
-	s.handleWith(mux, "/orders/", s.handleOrderOne, []string{"POST", "PUT", "DELETE"}, []string{"POST", "PUT", "DELETE"})
-	s.handleWith(mux, "/orders-deliver/", s.handleDeliver, []string{"PUT"}, []string{"PUT"})
-	s.handleWith(mux, "/orders-return/", s.handleClientReturn, []string{"PUT"}, []string{"PUT"})
+	s.handleWith(mux, "/orders", s.handleOrders, []string{"POST"})
+	s.handleWith(mux, "/orders/", s.handleOrderOne, []string{"POST", "PUT", "DELETE"})
+	s.handleWith(mux, "/orders-deliver/", s.handleDeliver, []string{"PUT"})
+	s.handleWith(mux, "/orders-return/", s.handleClientReturn, []string{"PUT"})
 	mux.HandleFunc("/returns", s.handleGetReturns)
 	return mux
 }
 
 func TestHandleCreateOrder(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -222,7 +214,7 @@ func TestHandleCreateOrder(t *testing.T) {
 
 func TestHandleListOrders(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -246,7 +238,7 @@ func TestHandleListOrders(t *testing.T) {
 
 func TestHandleGetOrder(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -295,7 +287,7 @@ func TestHandleGetOrder(t *testing.T) {
 
 func TestHandleUpdateOrder(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -366,7 +358,7 @@ func TestHandleUpdateOrder(t *testing.T) {
 
 func TestHandleDeleteOrder(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -398,7 +390,7 @@ func TestHandleDeleteOrder(t *testing.T) {
 
 func TestHandleDeliver(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -439,7 +431,7 @@ func TestHandleDeliver(t *testing.T) {
 
 func TestHandleClientReturn(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 
@@ -480,7 +472,7 @@ func TestHandleClientReturn(t *testing.T) {
 
 func TestHandleGetReturns(t *testing.T) {
 	repo := newFakeRepo()
-	cfg := newTestConfig()
+	cfg := config.LoadConfig()
 	s := NewServer(repo, cfg)
 	mux := createTestMux(s)
 

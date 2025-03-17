@@ -24,11 +24,11 @@ import (
 	"gitlab.ozon.dev/qwestard/homework/internal/server"
 )
 
-type IntegrationSuite struct {
+type integrationSuite struct {
 	suite.Suite
 }
 
-func (suite *IntegrationSuite) SetupSuite() {
+func (suite *integrationSuite) SetupSuite() {
 	cfg := config.LoadConfig()
 
 	var err error
@@ -57,12 +57,12 @@ func (suite *IntegrationSuite) SetupSuite() {
 	}
 }
 
-func (suite *IntegrationSuite) TearDownSuite() {
+func (suite *integrationSuite) TearDownSuite() {
 	testServer.Close()
 	_ = db.Close()
 }
 
-func (suite *IntegrationSuite) TestCreateOrder() {
+func (suite *integrationSuite) TestCreateOrder() {
 	order := models.Order{
 		ID:              "test-integration-create-1",
 		RecipientID:     "user001",
@@ -77,11 +77,11 @@ func (suite *IntegrationSuite) TestCreateOrder() {
 
 	var got models.Order
 	err := json.Unmarshal(body, &got)
-	assert.NoError(suite.T(), err)
-	assert.Equal(suite.T(), order.ID, got.ID)
+	suite.Require().NoError(err, "json.Unmarshal error")
+	suite.Assert().Equal(order.ID, got.ID)
 }
 
-func (suite *IntegrationSuite) TestListOrders() {
+func (suite *integrationSuite) TestListOrders() {
 	for i := 1; i <= 2; i++ {
 		order := models.Order{
 			ID:              "test-list-" + strconv.Itoa(i),
@@ -96,11 +96,28 @@ func (suite *IntegrationSuite) TestListOrders() {
 
 	var orders []models.Order
 	err := json.Unmarshal(body, &orders)
-	assert.NoError(suite.T(), err)
-	assert.True(suite.T(), len(orders) >= 2, "expected at least 2 orders")
+	suite.Require().NoError(err)
+	suite.Assert().GreaterOrEqual(len(orders), 2)
 }
 
-func (suite *IntegrationSuite) doRequest(method, path string, body interface{}) (*http.Response, []byte) {
+func (suite *integrationSuite) TestUpdateOrder_NotFound() {
+	update := models.Order{
+		ID:              "unknown-id",
+		StorageDeadline: time.Now().Add(2 * time.Hour),
+	}
+	resp, body := suite.doRequest(http.MethodPut, "/orders/unknown-id", update)
+	suite.Assert().Equal(http.StatusInternalServerError, resp.StatusCode)
+
+	suite.T().Log("Response body:", string(body))
+}
+
+func (suite *integrationSuite) TestDeleteOrder_NotFound() {
+	resp, body := suite.doRequest(http.MethodDelete, "/orders/not-existing", nil)
+	suite.Assert().Equal(http.StatusNotFound, resp.StatusCode)
+	suite.T().Log("Response body:", string(body))
+}
+
+func (suite *integrationSuite) doRequest(method, path string, body any) (*http.Response, []byte) {
 	var reqBody []byte
 	var err error
 	if body != nil {
@@ -129,5 +146,5 @@ func (suite *IntegrationSuite) doRequest(method, path string, body interface{}) 
 }
 
 func TestIntegrationSuite(t *testing.T) {
-	suite.Run(t, new(IntegrationSuite))
+	suite.Run(t, new(integrationSuite))
 }

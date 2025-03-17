@@ -218,7 +218,7 @@ func (r *OrderRepository) GetReturns(offset int64, limit int64, recipientID stri
 
 	b.WriteString(` ORDER BY id ASC LIMIT $1 OFFSET $2`)
 
-	var args []interface{}
+	var args []any
 	args = append(args, limit, offset)
 
 	if recipientID != "" {
@@ -254,25 +254,35 @@ func (r *OrderRepository) List(cursor string, limit int64, recipientID string) (
 		limit = 10
 	}
 
-	var sb strings.Builder
-	args := []interface{}{limit}
+	var (
+		sb         strings.Builder
+		args       []interface{}
+		conditions []string
+		paramIndex = 1
+	)
 
-	sb.WriteString(`SELECT id FROM orders`)
+	sb.WriteString("SELECT id FROM orders")
+
 	if cursor != "" {
-		sb.WriteString(` WHERE id > $2`)
+		conditions = append(conditions, fmt.Sprintf("id > $%d", paramIndex))
 		args = append(args, cursor)
+		paramIndex++
 	}
 
 	if recipientID != "" {
-		if strings.Contains(sb.String(), "WHERE") {
-			sb.WriteString(` AND recipient_id = $1`)
-		} else {
-			sb.WriteString(` WHERE recipient_id = $1`)
-		}
-		args = append([]interface{}{recipientID}, args...)
+		conditions = append(conditions, fmt.Sprintf("recipient_id = $%d", paramIndex))
+		args = append(args, recipientID)
+		paramIndex++
 	}
 
-	sb.WriteString(` ORDER BY id ASC LIMIT $1`)
+	if len(conditions) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(conditions, " AND "))
+	}
+
+	sb.WriteString(fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", paramIndex))
+	args = append(args, limit)
+	paramIndex++
 
 	query := sb.String()
 
@@ -288,14 +298,15 @@ func (r *OrderRepository) List(cursor string, limit int64, recipientID string) (
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		if rows.Err() != nil {
-			return nil, rows.Err()
-		}
 		o, err := r.GetByID(id)
 		if err != nil {
 			return nil, err
 		}
 		orders = append(orders, o)
 	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
 	return orders, nil
 }

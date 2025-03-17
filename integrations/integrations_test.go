@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"github.com/stretchr/testify/require"
 	"io"
 	"log"
 	"net/http"
@@ -68,7 +69,7 @@ func TestMain(m *testing.M) {
 	_ = db.Close()
 }
 
-func doRequest(t *testing.T, method, path string, body interface{}) (*http.Response, []byte) {
+func doRequest(t *testing.T, method, path string, body any) (*http.Response, []byte) {
 	t.Helper()
 
 	var reqBody []byte
@@ -119,7 +120,7 @@ func TestCreateOrderIntegration(t *testing.T) {
 
 	var got models.Order
 	err := json.Unmarshal(body, &got)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, order.ID, got.ID)
 }
 
@@ -149,8 +150,8 @@ func TestListOrdersIntegration(t *testing.T) {
 
 	var orders []models.Order
 	err := json.Unmarshal(body, &orders)
-	assert.NoError(t, err)
-	assert.True(t, len(orders) >= 2, "expected at least 2 orders")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(orders), 2)
 }
 
 func TestUpdateOrderIntegration(t *testing.T) {
@@ -166,7 +167,8 @@ func TestUpdateOrderIntegration(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var updated models.Order
-	json.Unmarshal(body, &updated)
+	err := json.Unmarshal(body, &updated)
+	require.NoError(t, err)
 	assert.Equal(t, float64(123), updated.Weight)
 }
 

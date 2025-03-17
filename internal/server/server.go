@@ -33,20 +33,19 @@ func NewServer(repo repository.Repository, cfg *config.Config) *Server {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	s.handleWith(mux, "/orders", s.handleOrders,
-		[]string{"POST"}, []string{"POST"},
+		[]string{"POST"},
 	)
 
 	s.handleWith(mux, "/orders/", s.handleOrderOne,
 		[]string{"POST", "PUT", "DELETE"},
-		[]string{"POST", "PUT", "DELETE"},
 	)
 
 	s.handleWith(mux, "/orders-deliver/", s.handleDeliver,
-		[]string{"PUT"}, []string{"PUT"},
+		[]string{"PUT"},
 	)
 
 	s.handleWith(mux, "/orders-return/", s.handleClientReturn,
-		[]string{"PUT"}, []string{"PUT"},
+		[]string{"PUT"},
 	)
 
 	mux.HandleFunc("/returns", s.handleGetReturns)
@@ -63,10 +62,10 @@ func (s *Server) Run() error {
 
 func (s *Server) handleWith(mux *http.ServeMux, path string,
 	handlerFunc http.HandlerFunc,
-	logMethods []string, authMethods []string,
+	methods []string,
 ) {
-	finalHandler := middleware.LogMiddleware(logMethods...)(
-		middleware.BasicAuthMiddleware(s.user, s.password, authMethods...)(
+	finalHandler := middleware.LogMiddleware(methods...)(
+		middleware.BasicAuthMiddleware(s.user, s.password, methods...)(
 			handlerFunc,
 		),
 	)
