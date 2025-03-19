@@ -1,12 +1,11 @@
 package main
 
 import (
-	"log"
-
 	"gitlab.ozon.dev/qwestard/homework/internal/config"
 	"gitlab.ozon.dev/qwestard/homework/internal/db"
 	"gitlab.ozon.dev/qwestard/homework/internal/repository"
 	"gitlab.ozon.dev/qwestard/homework/internal/server"
+	"log"
 )
 
 func main() {
