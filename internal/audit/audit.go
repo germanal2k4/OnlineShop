@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -24,13 +25,27 @@ type AuditLogProcessor interface {
 	Process(batch []AuditLog) error
 }
 
-type DBProcessor struct{}
+type DBProcessor struct {
+	db *sql.DB
+}
 
 func (p *DBProcessor) Process(batch []AuditLog) error {
-	fmt.Println("DBProcessor: Saving batch to DB:")
-	for _, rec := range batch {
-		fmt.Printf("DB: %s | Order: %s | %s -> %s\n",
-			rec.Timestamp.Format(time.RFC3339), rec.OrderID, rec.OldState, rec.NewState)
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO audit_logs (timestamp, order_id, old_state, new_state, endpoint, request, response, message) VALUES `)
+
+	params := []interface{}{}
+	paramIndex := 1
+	for i, rec := range batch {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", paramIndex, paramIndex+1, paramIndex+2, paramIndex+3, paramIndex+4, paramIndex+5, paramIndex+6, paramIndex+7))
+		paramIndex += 8
+		params = append(params, rec.Timestamp, rec.OrderID, rec.OldState, rec.NewState, rec.Endpoint, rec.Request, rec.Response, rec.Message)
+	}
+	_, err := p.db.Exec(sb.String(), params...)
+	if err != nil {
+		return fmt.Errorf("DBProcessor error: %w", err)
 	}
 	return nil
 }

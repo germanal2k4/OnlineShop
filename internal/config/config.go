@@ -6,18 +6,20 @@ import (
 )
 
 type Config struct {
-	DSN      string
-	HTTPPort string
-	Username string
-	Password string
+	DSN        string
+	HTTPPort   string
+	Username   string
+	Password   string
+	FilterWord string
 }
 
 func LoadConfig() *Config {
 	return &Config{
-		DSN:      getEnv("APP_DSN", "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"),
-		HTTPPort: getEnv("APP_PORT", "9000"),
-		Username: getEnv("APP_USER", "admin"),
-		Password: getEnv("APP_PASS", "secret"),
+		DSN:        getEnv("APP_DSN", "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"),
+		HTTPPort:   getEnv("APP_PORT", "9000"),
+		Username:   getEnv("APP_USER", "admin"),
+		Password:   getEnv("APP_PASS", "secret"),
+		FilterWord: getEnv("APP_FILTER", ""),
 	}
 }
 

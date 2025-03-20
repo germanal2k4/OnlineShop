@@ -23,12 +23,13 @@ type Server struct {
 	auditPool *audit.AuditWorkerPool
 }
 
-func NewServer(repo repository.Repository, cfg *config.Config) *Server {
+func NewServer(repo repository.Repository, cfg *config.Config, auditPool *audit.AuditWorkerPool) *Server {
 	return &Server{
-		repo:     repo,
-		user:     cfg.Username,
-		password: cfg.Password,
-		addr:     cfg.Addr(),
+		repo:      repo,
+		user:      cfg.Username,
+		password:  cfg.Password,
+		addr:      cfg.Addr(),
+		auditPool: auditPool,
 	}
 }
 
@@ -54,7 +55,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) Run() error {
-	s.auditPool = audit.NewAuditWorkerPool(5, 500*time.Millisecond, &audit.StdoutProcessor{Filter: ""})
 	s.auditPool.Start(2)
 	defer s.auditPool.Shutdown()
 
