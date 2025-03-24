@@ -1,11 +1,29 @@
 package middleware
 
 import (
+	"fmt"
 	"gitlab.ozon.dev/qwestard/homework/internal/audit"
 	"log"
 	"net/http"
 	"time"
 )
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	size   int
+}
+
+func (lrw *loggingResponseWriter) WriteHeader(code int) {
+	lrw.status = code
+	lrw.ResponseWriter.WriteHeader(code)
+}
+
+func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
+	n, err := lrw.ResponseWriter.Write(b)
+	lrw.size += n
+	return n, err
+}
 
 func BasicAuthMiddleware(user, pass string, methods ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -38,6 +56,22 @@ func LogMiddleware(auditPool *audit.AuditWorkerPool, methods ...string) func(htt
 				})
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func AuditResponseMiddleware(auditPool *audit.AuditWorkerPool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lrw := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(lrw, r)
+			auditPool.Log(audit.AuditLog{
+				Timestamp: time.Now().UTC(),
+				Endpoint:  r.URL.Path,
+				Request:   r.Method + " " + r.URL.String(),
+				Response:  fmt.Sprintf("%s (%d bytes)", http.StatusText(lrw.status), lrw.size),
+				Message:   "Endpoint processed",
+			})
 		})
 	}
 }

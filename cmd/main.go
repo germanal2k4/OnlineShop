@@ -20,7 +20,13 @@ func main() {
 	defer database.Close()
 
 	repo := repository.NewOrderRepository(database)
-	auditPool := audit.NewAuditWorkerPool(5, 500*time.Millisecond, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
 
 	srv := server.NewServer(repo, cfg, auditPool)
 

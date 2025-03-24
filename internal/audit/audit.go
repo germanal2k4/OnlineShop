@@ -21,6 +21,12 @@ type AuditLog struct {
 	Message   string
 }
 
+type AuditPoolConfig struct {
+	BatchSize   int
+	Timeout     time.Duration
+	ChannelSize int
+}
+
 type AuditLogProcessor interface {
 	Process(batch []AuditLog) error
 }
@@ -57,10 +63,9 @@ type StdoutProcessor struct {
 func (p *StdoutProcessor) Process(batch []AuditLog) error {
 	fmt.Println("StdoutProcessor: Writing batch to stdout:")
 	for _, rec := range batch {
-		if p.Filter != "" {
-			if !strings.Contains(strings.ToLower(rec.Message), strings.ToLower(p.Filter)) {
-				continue
-			}
+		if p.Filter != "" &&
+			!strings.Contains(strings.ToLower(rec.Message), strings.ToLower(p.Filter)) {
+			continue
 		}
 		fmt.Printf("STDOUT: %s | Order: %s | %s -> %s | Msg: %s\n",
 			rec.Timestamp.Format(time.RFC3339), rec.OrderID, rec.OldState, rec.NewState, rec.Message)
@@ -74,37 +79,35 @@ type AuditWorkerPool struct {
 	batchSize  int
 	timeout    time.Duration
 
-	wg     sync.WaitGroup
-	ctx    context.Context
-	cancel context.CancelFunc
+	wg sync.WaitGroup
 }
 
-func NewAuditWorkerPool(batchSize int, timeout time.Duration, processors ...AuditLogProcessor) *AuditWorkerPool {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewAuditWorkerPool(cfg AuditPoolConfig, processors ...AuditLogProcessor) *AuditWorkerPool {
 	return &AuditWorkerPool{
-		inputCh:    make(chan AuditLog, 100),
+		inputCh:    make(chan AuditLog, cfg.ChannelSize),
 		processors: processors,
-		batchSize:  batchSize,
-		timeout:    timeout,
-		ctx:        ctx,
-		cancel:     cancel,
+		batchSize:  cfg.BatchSize,
+		timeout:    cfg.Timeout,
 	}
 }
 
-func (p *AuditWorkerPool) Start(numWorkers int) {
+func (p *AuditWorkerPool) Start(numWorkers int, ctx context.Context) {
 	for i := 0; i < numWorkers; i++ {
 		p.wg.Add(1)
-		go p.worker()
+		go func(ctx context.Context) {
+			defer p.wg.Done()
+			p.worker(ctx)
+		}(ctx)
 	}
 }
 
-func (p *AuditWorkerPool) worker() {
+func (p *AuditWorkerPool) worker(ctx context.Context) {
 	defer p.wg.Done()
 	var batch []AuditLog
 	timer := time.NewTimer(p.timeout)
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			if len(batch) > 0 {
 				p.processBatch(batch)
 			}
@@ -145,7 +148,7 @@ func (p *AuditWorkerPool) Log(record AuditLog) {
 	}
 }
 
-func (p *AuditWorkerPool) Shutdown() {
-	p.cancel()
+func (p *AuditWorkerPool) Shutdown(cancelFunc context.CancelFunc) {
+	cancelFunc()
 	p.wg.Wait()
 }
