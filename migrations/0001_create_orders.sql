@@ -26,6 +26,5 @@ CREATE TABLE order_packaging
 );
 
 -- +goose Down
-DROP TABLE audit_logs;
 DROP TABLE order_packaging;
 DROP TABLE orders;

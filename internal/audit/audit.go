@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -25,6 +26,7 @@ type AuditPoolConfig struct {
 	BatchSize   int
 	Timeout     time.Duration
 	ChannelSize int
+	Worker      int
 }
 
 type AuditLogProcessor interface {
@@ -32,12 +34,12 @@ type AuditLogProcessor interface {
 }
 
 type DBProcessor struct {
-	db *sql.DB
+	Db *sql.DB
 }
 
 func (p *DBProcessor) Process(batch []AuditLog) error {
 	var sb strings.Builder
-	sb.WriteString(`INSERT INTO audit_logs (timestamp, order_id, old_state, new_state, endpoint, request, response, message) VALUES `)
+	sb.WriteString("INSERT INTO audit_logs (created_at, data) VALUES ")
 
 	params := []interface{}{}
 	paramIndex := 1
@@ -45,11 +47,16 @@ func (p *DBProcessor) Process(batch []AuditLog) error {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", paramIndex, paramIndex+1, paramIndex+2, paramIndex+3, paramIndex+4, paramIndex+5, paramIndex+6, paramIndex+7))
-		paramIndex += 8
-		params = append(params, rec.Timestamp, rec.OrderID, rec.OldState, rec.NewState, rec.Endpoint, rec.Request, rec.Response, rec.Message)
+		sb.WriteString(fmt.Sprintf("($%d, $%d)", paramIndex, paramIndex+1))
+		paramIndex += 2
+
+		jsonData, err := json.Marshal(rec)
+		if err != nil {
+			return fmt.Errorf("DBProcessor: error marshalling audit log: %w", err)
+		}
+		params = append(params, rec.Timestamp, jsonData)
 	}
-	_, err := p.db.Exec(sb.String(), params...)
+	_, err := p.Db.Exec(sb.String(), params...)
 	if err != nil {
 		return fmt.Errorf("DBProcessor error: %w", err)
 	}
@@ -78,6 +85,7 @@ type AuditWorkerPool struct {
 	processors []AuditLogProcessor
 	batchSize  int
 	timeout    time.Duration
+	workers    int
 
 	wg sync.WaitGroup
 }
@@ -88,11 +96,12 @@ func NewAuditWorkerPool(cfg AuditPoolConfig, processors ...AuditLogProcessor) *A
 		processors: processors,
 		batchSize:  cfg.BatchSize,
 		timeout:    cfg.Timeout,
+		workers:    cfg.Worker,
 	}
 }
 
-func (p *AuditWorkerPool) Start(numWorkers int, ctx context.Context) {
-	for i := 0; i < numWorkers; i++ {
+func (p *AuditWorkerPool) Start(ctx context.Context) {
+	for i := 0; i < p.workers; i++ {
 		p.wg.Add(1)
 		go func(ctx context.Context) {
 			defer p.wg.Done()
@@ -102,7 +111,6 @@ func (p *AuditWorkerPool) Start(numWorkers int, ctx context.Context) {
 }
 
 func (p *AuditWorkerPool) worker(ctx context.Context) {
-	defer p.wg.Done()
 	var batch []AuditLog
 	timer := time.NewTimer(p.timeout)
 	for {
@@ -133,22 +141,25 @@ func (p *AuditWorkerPool) worker(ctx context.Context) {
 }
 
 func (p *AuditWorkerPool) processBatch(batch []AuditLog) {
+	var wg sync.WaitGroup
 	for _, proc := range p.processors {
-		if err := proc.Process(batch); err != nil {
-			log.Printf("Error processing batch: %v", err)
-		}
+		wg.Add(1)
+		go func(pr AuditLogProcessor) {
+			defer wg.Done()
+			if err := pr.Process(batch); err != nil {
+				log.Printf("Error processing batch: %v", err)
+			}
+		}(proc)
 	}
+	wg.Wait()
 }
 
 func (p *AuditWorkerPool) Log(record AuditLog) {
-	select {
-	case p.inputCh <- record:
-	default:
-		log.Println("Audit log channel full, dropping log")
-	}
+	go func(rec AuditLog) {
+		p.inputCh <- record
+	}(record)
 }
 
-func (p *AuditWorkerPool) Shutdown(cancelFunc context.CancelFunc) {
-	cancelFunc()
+func (p *AuditWorkerPool) Shutdown() {
 	p.wg.Wait()
 }

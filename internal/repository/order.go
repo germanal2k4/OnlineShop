@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
 )
@@ -12,12 +13,17 @@ import (
 type Repository interface {
 	Create(o *models.Order) error
 	List(cursor string, limit int64, recipientID string) ([]*models.Order, error)
-	GetByID(id string) (*models.Order, error)
-	Update(o *models.Order) error
+	GetByID(tx *sql.Tx, id string) (*models.Order, error)
+	GetID(id string) (*models.Order, error)
+	Update(tx *sql.Tx, o *models.Order) error
 	Delete(id string) error
 	Deliver(id string) error
 	ClientReturn(id string) error
 	GetReturns(offset, limit int64, recipientID string) ([]*models.Order, error)
+	ReturnOrder(id string) error
+	AcceptOrder(id string) error
+	fetchPackaging(orderID string) ([]string, error)
+	UpdateTx(o *models.Order) error
 }
 
 type OrderRepository struct {
@@ -84,8 +90,49 @@ func insertPackaging(tx *sql.Tx, orderID string, packaging []string) error {
 	return nil
 }
 
-func (r *OrderRepository) GetByID(id string) (*models.Order, error) {
+func (r *OrderRepository) GetByID(tx *sql.Tx, id string) (*models.Order, error) {
 	o := &models.Order{}
+	query := `SELECT
+		id, recipient_id, storage_deadline,
+		accepted_at, delivered_at, returned_at, client_return_at,
+		last_state_change, weight, cost
+	FROM orders WHERE id=$1 FOR UPDATE`
+	row := tx.QueryRow(query, id)
+	err := row.Scan(
+		&o.ID, &o.RecipientID, &o.StorageDeadline,
+		&o.AcceptedAt, &o.DeliveredAt, &o.ReturnedAt, &o.ClientReturnAt,
+		&o.LastStateChange, &o.Weight, &o.Cost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil || row.Err() != nil {
+		return nil, fmt.Errorf("GetByID: %w", err)
+	}
+	rows, err := tx.Query(`SELECT pkg_value FROM order_packaging WHERE order_id=$1`, id)
+	if err != nil {
+		return nil, fmt.Errorf("GetByID: %w", err)
+	}
+	defer rows.Close()
+	var pkgs []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		if rows.Err() != nil {
+			return nil, rows.Err()
+		}
+		pkgs = append(pkgs, s)
+	}
+	o.Packaging = pkgs
+	return o, nil
+}
+
+func (r *OrderRepository) GetID(id string) (*models.Order, error) {
+
+	o := &models.Order{}
+
 	query := `SELECT
 		id, recipient_id, storage_deadline,
 		accepted_at, delivered_at, returned_at, client_return_at,
@@ -109,6 +156,7 @@ func (r *OrderRepository) GetByID(id string) (*models.Order, error) {
 	}
 	o.Packaging = pkgs
 	return o, nil
+
 }
 
 func (r *OrderRepository) fetchPackaging(orderID string) ([]string, error) {
@@ -131,7 +179,39 @@ func (r *OrderRepository) fetchPackaging(orderID string) ([]string, error) {
 	return result, nil
 }
 
-func (r *OrderRepository) Update(o *models.Order) error {
+func (r *OrderRepository) Update(tx *sql.Tx, o *models.Order) error {
+
+	query := `UPDATE orders SET
+		recipient_id=$1, storage_deadline=$2,
+		accepted_at=$3, delivered_at=$4,
+		returned_at=$5, client_return_at=$6,
+		last_state_change=$7, weight=$8, cost=$9
+	WHERE id=$10`
+	res, err := tx.Exec(query,
+		o.RecipientID, o.StorageDeadline,
+		o.AcceptedAt, o.DeliveredAt,
+		o.ReturnedAt, o.ClientReturnAt,
+		o.LastStateChange, o.Weight, o.Cost,
+		o.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update order: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("order %s not found", o.ID)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM order_packaging WHERE order_id=$1`, o.ID); err != nil {
+		return fmt.Errorf("delete packaging: %w", err)
+	}
+	if err := insertPackaging(tx, o.ID, o.Packaging); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *OrderRepository) UpdateTx(o *models.Order) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -181,7 +261,13 @@ func (r *OrderRepository) Delete(id string) error {
 }
 
 func (r *OrderRepository) Deliver(id string) error {
-	o, err := r.GetByID(id)
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	o, err := r.GetByID(tx, id)
 	if err != nil {
 		return err
 	}
@@ -189,19 +275,39 @@ func (r *OrderRepository) Deliver(id string) error {
 		return fmt.Errorf("order %s not found", id)
 	}
 	o.UpdateState(models.OrderStateDelivered)
-	return r.Update(o)
+	o.DeliveredAt = time.Now().UTC()
+	o.LastStateChange = time.Now().UTC()
+
+	if err := r.Update(tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
+
 }
 
 func (r *OrderRepository) ClientReturn(id string) error {
-	o, err := r.GetByID(id)
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	o, err := r.GetByID(tx, id)
 	if err != nil {
 		return err
 	}
 	if o == nil {
 		return fmt.Errorf("order %s not found", id)
 	}
+
 	o.UpdateState(models.OrderStateClientRtn)
-	return r.Update(o)
+	o.ClientReturnAt = time.Now().UTC()
+	o.LastStateChange = time.Now().UTC()
+
+	if err := r.Update(tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *OrderRepository) GetReturns(offset int64, limit int64, recipientID string) ([]*models.Order, error) {
@@ -225,7 +331,13 @@ func (r *OrderRepository) GetReturns(offset int64, limit int64, recipientID stri
 		args = append(args, recipientID)
 	}
 
-	rows, err := r.db.Query(b.String(), args...)
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(b.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("GetReturns: %w", err)
 	}
@@ -240,13 +352,13 @@ func (r *OrderRepository) GetReturns(offset int64, limit int64, recipientID stri
 		if rows.Err() != nil {
 			return nil, rows.Err()
 		}
-		o, err := r.GetByID(id)
+		o, err := r.GetByID(tx, id)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, o)
 	}
-	return result, nil
+	return result, tx.Commit()
 }
 
 func (r *OrderRepository) List(cursor string, limit int64, recipientID string) ([]*models.Order, error) {
@@ -286,19 +398,26 @@ func (r *OrderRepository) List(cursor string, limit int64, recipientID string) (
 
 	query := sb.String()
 
-	rows, err := r.db.Query(query, args...)
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list orders: %w", err)
 	}
 	defer rows.Close()
 
 	var orders []*models.Order
+
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		o, err := r.GetByID(id)
+		o, err := r.GetByID(tx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -308,5 +427,54 @@ func (r *OrderRepository) List(cursor string, limit int64, recipientID string) (
 		return nil, rows.Err()
 	}
 
-	return orders, nil
+	return orders, tx.Commit()
+}
+
+func (r *OrderRepository) AcceptOrder(id string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	o, err := r.GetByID(tx, id)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return fmt.Errorf("order %s not found", id)
+	}
+
+	o.UpdateState(models.OrderStateAccepted)
+	o.AcceptedAt = time.Now().UTC()
+	o.LastStateChange = time.Now().UTC()
+
+	if err := r.Update(tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *OrderRepository) ReturnOrder(id string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	o, err := r.GetByID(tx, id)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return fmt.Errorf("order %s not found", id)
+	}
+	o.UpdateState(models.OrderStateReturned)
+	o.ReturnedAt = time.Now().UTC()
+	o.LastStateChange = time.Now().UTC()
+
+	if err := r.Update(tx, o); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
