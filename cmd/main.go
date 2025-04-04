@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"log"
+	"time"
+
 	"gitlab.ozon.dev/qwestard/homework/internal/audit"
 	"gitlab.ozon.dev/qwestard/homework/internal/cache"
 	"gitlab.ozon.dev/qwestard/homework/internal/config"
 	"gitlab.ozon.dev/qwestard/homework/internal/db"
 	"gitlab.ozon.dev/qwestard/homework/internal/repository"
 	"gitlab.ozon.dev/qwestard/homework/internal/server"
-	"log"
-	"time"
+	"gitlab.ozon.dev/qwestard/homework/internal/service"
+	"gitlab.ozon.dev/qwestard/homework/internal/wrapper"
 )
 
 func main() {
@@ -16,22 +20,30 @@ func main() {
 
 	database, err := db.NewDB(cfg.DSN)
 	if err != nil {
-		log.Fatalf("Error in connection to db: %v", err)
+		log.Fatalf("Error connecting to db: %v", err)
 	}
 	defer database.Close()
 
 	repo := repository.NewOrderRepository(database)
 
-	poolConfig := audit.AuditPoolConfig{
-		BatchSize:   5,
-		Timeout:     500 * time.Millisecond,
-		ChannelSize: 50,
-		Worker:      2,
+	processorConfigs := []audit.ProcessorConfig{
+		{
+			Processor:   &audit.DBProcessor{Db: database},
+			BatchSize:   5,
+			Timeout:     500 * time.Millisecond,
+			ChannelSize: 50,
+		},
+		{
+			Processor:   &audit.StdoutProcessor{Filter: cfg.FilterWord},
+			BatchSize:   3,
+			Timeout:     2 * time.Second,
+			ChannelSize: 50,
+		},
 	}
-	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord}, &audit.DBProcessor{Db: database})
+
+	auditPool := audit.NewAuditWorkerPool(processorConfigs)
 
 	activeCache := cache.NewActiveOrdersCache()
-
 	if err := activeCache.Refresh(repo); err != nil {
 		log.Fatalf("Error refreshing active cache: %v", err)
 	}
@@ -40,13 +52,16 @@ func main() {
 	if err := historyCache.Refresh(repo); err != nil {
 		log.Fatalf("Error refreshing history cache: %v", err)
 	}
-	stopCh := make(chan struct{})
 
-	defer close(stopCh)
+	orderService := service.NewOrderService(repo, activeCache, historyCache)
+	orderWrapper := wrapper.NewOrderWrapper(orderService)
 
-	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+	srv := server.NewServer(orderWrapper, cfg, auditPool)
 
-	srv := server.NewServer(repo, cfg, auditPool, activeCache, historyCache)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go historyCache.StartAutoRefresh(ctx, repo, 5*time.Minute)
 
 	if err := srv.Run(); err != nil {
 		log.Fatalf("Server stopped with error: %v", err)

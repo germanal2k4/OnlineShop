@@ -22,13 +22,6 @@ type AuditLog struct {
 	Message   string
 }
 
-type AuditPoolConfig struct {
-	BatchSize   int
-	Timeout     time.Duration
-	ChannelSize int
-	Worker      int
-}
-
 type AuditLogProcessor interface {
 	Process(batch []AuditLog) error
 }
@@ -70,8 +63,7 @@ type StdoutProcessor struct {
 func (p *StdoutProcessor) Process(batch []AuditLog) error {
 	fmt.Println("StdoutProcessor: Writing batch to stdout:")
 	for _, rec := range batch {
-		if p.Filter != "" &&
-			!strings.Contains(strings.ToLower(rec.Message), strings.ToLower(p.Filter)) {
+		if p.Filter != "" && !strings.Contains(strings.ToLower(rec.Message), strings.ToLower(p.Filter)) {
 			continue
 		}
 		fmt.Printf("STDOUT: %s | Order: %s | %s -> %s | Msg: %s\n",
@@ -80,86 +72,95 @@ func (p *StdoutProcessor) Process(batch []AuditLog) error {
 	return nil
 }
 
-type AuditWorkerPool struct {
-	inputCh    chan AuditLog
-	processors []AuditLogProcessor
-	batchSize  int
-	timeout    time.Duration
-	workers    int
-
-	wg sync.WaitGroup
+type ProcessorConfig struct {
+	Processor   AuditLogProcessor
+	BatchSize   int
+	Timeout     time.Duration
+	ChannelSize int
 }
 
-func NewAuditWorkerPool(cfg AuditPoolConfig, processors ...AuditLogProcessor) *AuditWorkerPool {
+type auditWorker struct {
+	ch        chan AuditLog
+	processor AuditLogProcessor
+	batchSize int
+	timeout   time.Duration
+	wg        sync.WaitGroup
+}
+
+func (w *auditWorker) start(ctx context.Context) {
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		var batch []AuditLog
+		timer := time.NewTimer(w.timeout)
+		for {
+			select {
+			case <-ctx.Done():
+				if len(batch) > 0 {
+					if err := w.processor.Process(batch); err != nil {
+						log.Printf("Error processing batch: %v", err)
+					}
+				}
+				return
+			case rec := <-w.ch:
+				batch = append(batch, rec)
+				if len(batch) >= w.batchSize {
+					if !timer.Stop() {
+						<-timer.C
+					}
+					if err := w.processor.Process(batch); err != nil {
+						log.Printf("Error processing batch: %v", err)
+					}
+					batch = nil
+					timer.Reset(w.timeout)
+				}
+			case <-timer.C:
+				if len(batch) > 0 {
+					if err := w.processor.Process(batch); err != nil {
+						log.Printf("Error processing batch: %v", err)
+					}
+					batch = nil
+				}
+				timer.Reset(w.timeout)
+			}
+		}
+	}()
+}
+
+type AuditWorkerPool struct {
+	workers []*auditWorker
+}
+
+func NewAuditWorkerPool(configs []ProcessorConfig) *AuditWorkerPool {
+	var workers []*auditWorker
+	for _, cfg := range configs {
+		worker := &auditWorker{
+			ch:        make(chan AuditLog, cfg.ChannelSize),
+			processor: cfg.Processor,
+			batchSize: cfg.BatchSize,
+			timeout:   cfg.Timeout,
+		}
+		workers = append(workers, worker)
+	}
 	return &AuditWorkerPool{
-		inputCh:    make(chan AuditLog, cfg.ChannelSize),
-		processors: processors,
-		batchSize:  cfg.BatchSize,
-		timeout:    cfg.Timeout,
-		workers:    cfg.Worker,
+		workers: workers,
 	}
 }
 
 func (p *AuditWorkerPool) Start(ctx context.Context) {
-	for i := 0; i < p.workers; i++ {
-		p.wg.Add(1)
-		go func(ctx context.Context) {
-			defer p.wg.Done()
-			p.worker(ctx)
-		}(ctx)
+	for _, worker := range p.workers {
+		worker.start(ctx)
 	}
-}
-
-func (p *AuditWorkerPool) worker(ctx context.Context) {
-	var batch []AuditLog
-	timer := time.NewTimer(p.timeout)
-	for {
-		select {
-		case <-ctx.Done():
-			if len(batch) > 0 {
-				p.processBatch(batch)
-			}
-			return
-		case rec := <-p.inputCh:
-			batch = append(batch, rec)
-			if len(batch) >= p.batchSize {
-				if !timer.Stop() {
-					<-timer.C
-				}
-				p.processBatch(batch)
-				batch = nil
-				timer.Reset(p.timeout)
-			}
-		case <-timer.C:
-			if len(batch) > 0 {
-				p.processBatch(batch)
-				batch = nil
-			}
-			timer.Reset(p.timeout)
-		}
-	}
-}
-
-func (p *AuditWorkerPool) processBatch(batch []AuditLog) {
-	var wg sync.WaitGroup
-	for _, proc := range p.processors {
-		wg.Add(1)
-		go func(pr AuditLogProcessor) {
-			defer wg.Done()
-			if err := pr.Process(batch); err != nil {
-				log.Printf("Error processing batch: %v", err)
-			}
-		}(proc)
-	}
-	wg.Wait()
 }
 
 func (p *AuditWorkerPool) Log(record AuditLog) {
-	go func(rec AuditLog) {
-		p.inputCh <- record
-	}(record)
+	for _, worker := range p.workers {
+		worker.ch <- record
+	}
 }
 
 func (p *AuditWorkerPool) Shutdown() {
-	p.wg.Wait()
+	for _, worker := range p.workers {
+		worker.wg.Wait()
+	}
 }

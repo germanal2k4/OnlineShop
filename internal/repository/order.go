@@ -22,7 +22,7 @@ type Repository interface {
 	GetReturns(offset, limit int64, recipientID string) ([]*models.Order, error)
 	ReturnOrder(id string) error
 	AcceptOrder(id string) error
-	fetchPackaging(orderID string) ([]string, error)
+	FetchPackaging(orderID string) ([]string, error)
 	UpdateTx(o *models.Order) error
 }
 
@@ -150,7 +150,7 @@ func (r *OrderRepository) GetID(id string) (*models.Order, error) {
 	if err != nil || row.Err() != nil {
 		return nil, fmt.Errorf("GetByID: %w", err)
 	}
-	pkgs, err := r.fetchPackaging(id)
+	pkgs, err := r.FetchPackaging(id)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (r *OrderRepository) GetID(id string) (*models.Order, error) {
 
 }
 
-func (r *OrderRepository) fetchPackaging(orderID string) ([]string, error) {
+func (r *OrderRepository) FetchPackaging(orderID string) ([]string, error) {
 	var result []string
 	rows, err := r.db.Query(`SELECT pkg_value FROM order_packaging WHERE order_id=$1`, orderID)
 	if err != nil {

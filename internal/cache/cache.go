@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -79,19 +80,17 @@ func (c *HistoryCache) Get() []*models.Order {
 	return c.orders
 }
 
-func (c *HistoryCache) StartAutoRefresh(repo repository.Repository, interval time.Duration, stopCh <-chan struct{}) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := c.Refresh(repo); err != nil {
-					return
-				}
-			case <-stopCh:
+func (c *HistoryCache) StartAutoRefresh(ctx context.Context, repo repository.Repository, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := c.Refresh(repo); err != nil {
 				return
 			}
+		case <-ctx.Done():
+			return
 		}
-	}()
+	}
 }

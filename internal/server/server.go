@@ -5,38 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"gitlab.ozon.dev/qwestard/homework/internal/audit"
-	"gitlab.ozon.dev/qwestard/homework/internal/cache"
+	"gitlab.ozon.dev/qwestard/homework/internal/config"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/config"
 	"gitlab.ozon.dev/qwestard/homework/internal/middleware"
 	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"gitlab.ozon.dev/qwestard/homework/internal/wrapper"
 )
 
 type Server struct {
-	repo         repository.Repository
-	user         string
-	password     string
-	addr         string
-	auditPool    *audit.AuditWorkerPool
-	activeCache  *cache.ActiveOrdersCache
-	historyCache *cache.HistoryCache
+	wrap      *wrapper.OrderWrapper
+	user      string
+	password  string
+	addr      string
+	auditPool *audit.AuditWorkerPool
 }
 
-func NewServer(repo repository.Repository, cfg *config.Config, auditPool *audit.AuditWorkerPool, activeCache *cache.ActiveOrdersCache, historyCache *cache.HistoryCache) *Server {
+func NewServer(wrap *wrapper.OrderWrapper, cfg *config.Config, auditPool *audit.AuditWorkerPool) *Server {
 	return &Server{
-		repo:         repo,
-		user:         cfg.Username,
-		password:     cfg.Password,
-		addr:         cfg.Addr(),
-		auditPool:    auditPool,
-		activeCache:  activeCache,
-		historyCache: historyCache,
+		wrap:      wrap,
+		user:      cfg.Username,
+		password:  cfg.Password,
+		addr:      cfg.Addr(),
+		auditPool: auditPool,
 	}
 }
 
@@ -151,31 +146,26 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	o.LastStateChange = time.Now().UTC()
 
-	if err := s.repo.Create(&o); err != nil {
+	if err := s.wrap.CreateOrder(&o); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.activeCache.Mu.Lock()
-	s.activeCache.Orders[o.ID] = &o
-	s.activeCache.Mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, o)
 	s.logStatusTransition(o.ID, "", string(models.OrderStateAccepted), r.URL.Path)
 }
 
 func (s *Server) handleListOrders(w http.ResponseWriter, _ *http.Request) {
-	s.activeCache.Mu.RLock()
-	var orders []*models.Order
-	for _, o := range s.activeCache.Orders {
-		orders = append(orders, o)
+	orders, err := s.wrap.ListActiveOrders()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	s.activeCache.Mu.RUnlock()
 	writeJSON(w, http.StatusOK, orders)
-	return
 }
 
 func (s *Server) handleGetOrder(w http.ResponseWriter, _ *http.Request, id string) {
-	o, err := s.repo.GetID(id)
+	o, err := s.wrap.GetOrderByID(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -197,7 +187,7 @@ func (s *Server) handleUpdateOrder(w http.ResponseWriter, r *http.Request, id st
 		http.Error(w, "ID mismatch", http.StatusBadRequest)
 		return
 	}
-	oldOrder, err := s.repo.GetID(id)
+	oldOrder, err := s.wrap.GetOrderByID(id)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -208,13 +198,10 @@ func (s *Server) handleUpdateOrder(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	updated.LastStateChange = time.Now().UTC()
-	if err := s.repo.UpdateTx(&updated); err != nil {
+	if err := s.wrap.UpdateOrder(&updated); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.activeCache.Mu.Lock()
-	s.activeCache.Orders[id] = &updated
-	s.activeCache.Mu.Unlock()
 	writeJSON(w, http.StatusOK, updated)
 	newState := string(updated.CurrentState())
 	if oldState != newState {
@@ -223,13 +210,10 @@ func (s *Server) handleUpdateOrder(w http.ResponseWriter, r *http.Request, id st
 }
 
 func (s *Server) handleDeleteOrder(w http.ResponseWriter, _ *http.Request, id string) {
-	if err := s.repo.Delete(id); err != nil {
+	if err := s.wrap.DeleteOrder(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	s.activeCache.Mu.Lock()
-	delete(s.activeCache.Orders, id)
-	s.activeCache.Mu.Unlock()
 
 	w.WriteHeader(http.StatusNoContent)
 	s.logStatusTransition(id, "existing", "deleted", "/orders/"+id)
@@ -241,18 +225,12 @@ func (s *Server) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/orders-deliver/")
-	if err := s.repo.Deliver(id); err != nil {
+	if err := s.wrap.DeliverOrder(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	s.logStatusTransition(id, "", string(models.OrderStateDelivered), r.URL.Path)
-	o, err := s.repo.GetID(id)
-	if err == nil && o != nil {
-		s.activeCache.Mu.Lock()
-		s.activeCache.Orders[id] = o
-		s.activeCache.Mu.Unlock()
-	}
 }
 
 func (s *Server) handleClientReturn(w http.ResponseWriter, r *http.Request) {
@@ -261,18 +239,12 @@ func (s *Server) handleClientReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/orders-return/")
-	if err := s.repo.ClientReturn(id); err != nil {
+	if err := s.wrap.ClientReturnOrder(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	s.logStatusTransition(id, "", string(models.OrderStateClientRtn), r.URL.Path)
-	o, err := s.repo.GetID(id)
-	if err == nil && o != nil {
-		s.activeCache.Mu.Lock()
-		s.activeCache.Orders[id] = o
-		s.activeCache.Mu.Unlock()
-	}
 }
 
 func (s *Server) handleGetReturns(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +257,7 @@ func (s *Server) handleGetReturns(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.ParseInt(q.Get("limit"), 10, 64)
 	recipientID := q.Get("recipient_id")
 
-	orders, err := s.repo.GetReturns(offset, limit, recipientID)
+	orders, err := s.wrap.GetReturns(offset, limit, recipientID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -299,18 +271,13 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/orders-accept/")
-	if err := s.repo.AcceptOrder(id); err != nil {
+	if err := s.wrap.AcceptOrder(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	s.logStatusTransition(id, "", string(models.OrderStateAccepted), r.URL.Path)
-	o, err := s.repo.GetID(id)
-	if err == nil && o != nil {
-		s.activeCache.Mu.Lock()
-		s.activeCache.Orders[id] = o
-		s.activeCache.Mu.Unlock()
-	}
+
 }
 
 func (s *Server) handleCourierReturn(w http.ResponseWriter, r *http.Request) {
@@ -319,22 +286,20 @@ func (s *Server) handleCourierReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/orders-courier-return/")
-	if err := s.repo.ReturnOrder(id); err != nil {
+	if err := s.wrap.CourierReturnOrder(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	s.logStatusTransition(id, "", string(models.OrderStateReturned), r.URL.Path)
-	o, err := s.repo.GetID(id)
-	if err == nil && o != nil {
-		s.activeCache.Mu.Lock()
-		s.activeCache.Orders[id] = o
-		s.activeCache.Mu.Unlock()
-	}
 }
 
 func (s *Server) handleOrderHistory(w http.ResponseWriter, _ *http.Request) {
-	orders := s.historyCache.Get()
+	orders, err := s.wrap.ListHistoryOrders()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, orders)
 }
 
