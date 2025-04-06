@@ -32,7 +32,7 @@ type DBProcessor struct {
 
 func (p *DBProcessor) Process(batch []AuditLog) error {
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO audit_logs (created_at, data) VALUES ")
+	sb.WriteString("INSERT INTO tasks (created_at, updated_at, audit_data, status, attempt_count) VALUES ")
 
 	params := []interface{}{}
 	paramIndex := 1
@@ -40,14 +40,14 @@ func (p *DBProcessor) Process(batch []AuditLog) error {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		sb.WriteString(fmt.Sprintf("($%d, $%d)", paramIndex, paramIndex+1))
-		paramIndex += 2
+		sb.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", paramIndex, paramIndex+1, paramIndex+2, paramIndex+3, paramIndex+4))
+		paramIndex += 5
 
 		jsonData, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("DBProcessor: error marshalling audit log: %w", err)
 		}
-		params = append(params, rec.Timestamp, jsonData)
+		params = append(params, rec.Timestamp, rec.Timestamp, jsonData, "CREATED", 0)
 	}
 	_, err := p.Db.Exec(sb.String(), params...)
 	if err != nil {

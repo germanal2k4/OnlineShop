@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"gitlab.ozon.dev/qwestard/homework/internal/kafka"
+	taskprocessor "gitlab.ozon.dev/qwestard/homework/internal/processor"
 	"log"
 	"time"
 
@@ -25,6 +27,18 @@ func main() {
 	defer database.Close()
 
 	repo := repository.NewOrderRepository(database)
+
+	taskRepo := repository.NewPostgresTaskRepository(database)
+
+	prod, err := kafka.NewSaramaProducer(cfg.KafkaBrokers)
+	if err != nil {
+		log.Fatalf("Error creating Kafka producer: %v", err)
+	}
+	defer func() {
+		if err := prod.Close(); err != nil {
+			log.Printf("Error closing Kafka producer: %v", err)
+		}
+	}()
 
 	processorConfigs := []audit.ProcessorConfig{
 		{
@@ -60,6 +74,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	go historyCache.StartAutoRefresh(ctx, repo, 5*time.Minute)
+
+	taskProc := taskprocessor.NewTaskProcessor(taskRepo, *prod, cfg.KafkaTopic, 1*time.Second, 10)
+	go taskProc.Start(ctx)
+
+	go kafka.StartSaramaConsumer(cfg.KafkaBrokers, cfg.KafkaGroupID, []string{cfg.KafkaTopic})
 
 	go historyCache.StartAutoRefresh(ctx, repo, 5*time.Minute)
 
