@@ -58,9 +58,6 @@ func main() {
 	auditPool := audit.NewAuditWorkerPool(processorConfigs)
 
 	activeCache := cache.NewActiveOrdersCache()
-	if err := activeCache.Refresh(repo); err != nil {
-		log.Fatalf("Error refreshing active cache: %v", err)
-	}
 
 	historyCache := cache.NewHistoryCache()
 	if err := historyCache.Refresh(repo); err != nil {
@@ -70,6 +67,9 @@ func main() {
 	orderService := service.NewOrderService(repo, activeCache, historyCache)
 	orderWrapper := wrapper.NewOrderWrapper(orderService)
 
+	if err := orderWrapper.RefreshActiveOrders(); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
 	srv := server.NewServer(orderWrapper, cfg, auditPool)
 
 	ctx, cancel := context.WithCancel(context.Background())
