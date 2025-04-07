@@ -24,34 +24,6 @@ func NewActiveOrdersCache() *ActiveOrdersCache {
 	}
 }
 
-func (c *ActiveOrdersCache) Refresh(repo repository.Repository) error {
-	orders, err := repo.List("", 1000, "")
-	if err != nil {
-		return err
-	}
-	newMap := make(map[string]*models.Order)
-	for _, o := range orders {
-		state := o.CurrentState()
-		if state == models.OrderStateAccepted || state == models.OrderStateDelivered {
-			newMap[o.ID] = o
-		}
-	}
-	c.Mu.Lock()
-	c.Orders = newMap
-	c.Mu.Unlock()
-	return nil
-}
-
-func (c *ActiveOrdersCache) Get() map[string]*models.Order {
-	c.Mu.RLock()
-	defer c.Mu.RUnlock()
-	result := make(map[string]*models.Order, len(c.Orders))
-	for k, v := range c.Orders {
-		result[k] = v
-	}
-	return result
-}
-
 type HistoryCache struct {
 	mu     sync.RWMutex
 	orders []*models.Order
