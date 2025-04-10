@@ -28,7 +28,7 @@ type Task struct {
 
 type TaskRepository interface {
 	CreateTask(ctx context.Context, auditData []byte) error
-	GetPendingTasks(ctx context.Context, limit int) ([]*Task, error)
+	GetPendingTasks(ctx context.Context, limit int, maxAttempts int, retryDelay time.Duration) ([]*Task, error)
 	MarkTaskProcessing(ctx context.Context, taskID int) error
 	DeleteTask(ctx context.Context, taskID int) error
 	UpdateTaskFailure(ctx context.Context, taskID int, attemptCount int, newStatus TaskStatus, nextAttemptAt time.Time) error
@@ -51,34 +51,51 @@ func (r *PostgresTaskRepository) CreateTask(ctx context.Context, auditData []byt
 	return err
 }
 
-func (r *PostgresTaskRepository) GetPendingTasks(ctx context.Context, limit int) ([]*Task, error) {
+func (r *PostgresTaskRepository) GetPendingTasks(ctx context.Context, limit int, maxAttempts int, retryDelay time.Duration) ([]*Task, error) {
 	query := `
-		SELECT id, created_at, updated_at, finished_at, audit_data, status, attempt_count, next_attempt_at
-		FROM tasks
-		WHERE status IN ($1, $2)
-		  AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
-		  AND attempt_count < 3
-		ORDER BY created_at
-		LIMIT $3
-	`
-	rows, err := r.db.QueryContext(ctx, query, TaskStatusCreated, TaskStatusFailed, limit)
+WITH updated AS (
+    UPDATE tasks
+    SET status = 'PROCESSING',
+        attempt_count = attempt_count + 1,
+        updated_at = NOW(),
+        next_attempt_at = NOW() + $2
+    WHERE id IN (
+        SELECT id
+        FROM tasks
+        WHERE status IN ($3, $4)
+          AND COALESCE(next_attempt_at, '-infinity'::timestamp) <= NOW()
+          AND attempt_count < $5
+        ORDER BY created_at
+        LIMIT $6
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, created_at, updated_at, finished_at, audit_data, status, attempt_count, next_attempt_at
+)
+SELECT * FROM updated;
+`
+	rows, err := r.db.QueryContext(ctx, query,
+		retryDelay,
+		retryDelay,
+		TaskStatusCreated,
+		TaskStatusFailed,
+		maxAttempts,
+		limit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	var tasks []*Task
 	for rows.Next() {
 		t := &Task{}
-		if err := rows.Scan(&t.ID, &t.CreatedAt,
-			&t.UpdatedAt, &t.FinishedAt,
-			&t.AuditData, &t.Status,
-			&t.AttemptCount, &t.NextAttemptAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.FinishedAt, &t.AuditData, &t.Status, &t.AttemptCount, &t.NextAttemptAt); err != nil {
 			return nil, err
 		}
-		if rows.Err() != nil {
-			return nil, rows.Err()
-		}
 		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }

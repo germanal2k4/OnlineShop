@@ -5,6 +5,8 @@ import (
 	"gitlab.ozon.dev/qwestard/homework/internal/kafka"
 	taskprocessor "gitlab.ozon.dev/qwestard/homework/internal/processor"
 	"log"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"gitlab.ozon.dev/qwestard/homework/internal/audit"
@@ -80,7 +82,10 @@ func main() {
 	taskProc := taskprocessor.NewTaskProcessor(taskRepo, *prod, cfg.KafkaTopic, 1*time.Second, 10)
 	go taskProc.Start(ctx)
 
-	go kafka.StartSaramaConsumer(cfg.KafkaBrokers, cfg.KafkaGroupID, []string{cfg.KafkaTopic})
+	cont, cancelF := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancelF()
+
+	go kafka.StartSaramaConsumer(cont, cfg.KafkaConfig, cfg.KafkaBrokers, cfg.KafkaGroupID, []string{cfg.KafkaTopic})
 
 	go historyCache.StartAutoRefresh(ctx, repo, 5*time.Minute)
 

@@ -2,12 +2,8 @@ package kafka
 
 import (
 	"context"
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
-
 	"github.com/IBM/sarama"
+	"log"
 )
 
 type ConsumerGroupHandler struct{}
@@ -23,10 +19,8 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 	return nil
 }
 
-func StartSaramaConsumer(brokers []string, groupID string, topics []string) {
-	config := sarama.NewConfig()
-	config.Version = sarama.V2_1_0_0
-	config.Consumer.Offsets.Initial = sarama.OffsetNewest
+func StartSaramaConsumer(ctx context.Context, cfg *sarama.Config, brokers []string, groupID string, topics []string) {
+	config := cfg
 
 	consumerGroup, err := sarama.NewConsumerGroup(brokers, groupID, config)
 	if err != nil {
@@ -38,19 +32,17 @@ func StartSaramaConsumer(brokers []string, groupID string, topics []string) {
 		}
 	}()
 
-	ctx := context.Background()
 	handler := ConsumerGroupHandler{}
 
-	go func() {
-		for {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
 			if err := consumerGroup.Consume(ctx, topics, handler); err != nil {
 				log.Printf("Error from consumer: %v", err)
 			}
 		}
-	}()
+	}
 
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	<-sigterm
-	log.Println("Terminating: shutting down consumer")
 }

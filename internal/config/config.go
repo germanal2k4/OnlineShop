@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/IBM/sarama"
 	"os"
 	"strings"
 )
@@ -15,10 +16,14 @@ type Config struct {
 	KafkaBrokers []string
 	KafkaGroupID string
 	KafkaTopic   string
+	KafkaConfig  *sarama.Config
 }
 
 func LoadConfig() *Config {
 	brokersStr := getEnv("KAFKA_BROKERS", "localhost:9092")
+	config := sarama.NewConfig()
+	config.Version = sarama.V2_1_0_0
+	config.Consumer.Offsets.Initial = sarama.OffsetNewest
 	return &Config{
 		DSN:          getEnv("APP_DSN", "host=localhost user=postgres password=postgres dbname=pickups sslmode=disable"),
 		HTTPPort:     getEnv("APP_PORT", "9000"),
@@ -28,6 +33,7 @@ func LoadConfig() *Config {
 		KafkaBrokers: strings.Split(brokersStr, ","),
 		KafkaGroupID: getEnv("KAFKA_GROUP_ID", "audit-group"),
 		KafkaTopic:   getEnv("KAFKA_TOPIC", "audit-tasks"),
+		KafkaConfig:  config,
 	}
 }
 

@@ -40,12 +40,13 @@ func (p *TaskProcessor) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			p.processPendingTasks(ctx)
+			ticker.Reset(p.pollInterval)
 		}
 	}
 }
 
 func (p *TaskProcessor) processPendingTasks(ctx context.Context) {
-	tasks, err := p.repo.GetPendingTasks(ctx, p.limit)
+	tasks, err := p.repo.GetPendingTasks(ctx, p.limit, p.maxAttempts, p.retryDelay)
 	if err != nil {
 		log.Printf("Error fetching pending tasks: %v", err)
 		return
@@ -59,19 +60,7 @@ func (p *TaskProcessor) processPendingTasks(ctx context.Context) {
 
 		err = p.producer.Publish(p.topic, task.AuditData)
 		if err != nil {
-			newAttempt := task.AttemptCount + 1
-			var newStatus repository.TaskStatus
-			if newAttempt >= p.maxAttempts {
-				newStatus = repository.TaskStatusNoAttemptsLeft
-			} else {
-				newStatus = repository.TaskStatusFailed
-			}
-			nextAttempt := time.Now().Add(p.retryDelay)
-			errUpd := p.repo.UpdateTaskFailure(ctx, task.ID, newAttempt, newStatus, nextAttempt)
-			if errUpd != nil {
-				log.Printf("Error updating task %d on failure: %v", task.ID, errUpd)
-			}
-			log.Printf("Failed to publish task %d: %v", task.ID, err)
+			p.update(ctx, task, err)
 			continue
 		}
 		log.Printf("Task %d processed and published to Kafka", task.ID)
@@ -80,4 +69,20 @@ func (p *TaskProcessor) processPendingTasks(ctx context.Context) {
 			log.Printf("Error deleting task %d after successful publish: %v", task.ID, err)
 		}
 	}
+}
+
+func (p *TaskProcessor) update(ctx context.Context, task *repository.Task, err error) {
+	newAttempt := task.AttemptCount + 1
+	var newStatus repository.TaskStatus
+	if newAttempt >= p.maxAttempts {
+		newStatus = repository.TaskStatusNoAttemptsLeft
+	} else {
+		newStatus = repository.TaskStatusFailed
+	}
+	nextAttempt := time.Now().Add(p.retryDelay)
+	errUpd := p.repo.UpdateTaskFailure(ctx, task.ID, newAttempt, newStatus, nextAttempt)
+	if errUpd != nil {
+		log.Printf("Error updating task %d on failure: %v", task.ID, errUpd)
+	}
+	log.Printf("Failed to publish task %d: %v", task.ID, err)
 }
