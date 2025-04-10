@@ -91,8 +91,9 @@ func (w *auditWorker) start(ctx context.Context) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		var batch []AuditLog
+		batch := make([]AuditLog, 0, w.batchSize)
 		timer := time.NewTimer(w.timeout)
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -119,7 +120,7 @@ func (w *auditWorker) start(ctx context.Context) {
 					if err := w.processor.Process(batch); err != nil {
 						log.Printf("Error processing batch: %v", err)
 					}
-					batch = nil
+					batch = batch[:]
 				}
 				timer.Reset(w.timeout)
 			}
@@ -131,7 +132,7 @@ type AuditWorkerPool struct {
 	workers []*auditWorker
 }
 
-func NewAuditWorkerPool(configs []ProcessorConfig) *AuditWorkerPool {
+func NewAuditWorkerPool(configs ...ProcessorConfig) *AuditWorkerPool {
 	var workers []*auditWorker
 	for _, cfg := range configs {
 		worker := &auditWorker{
@@ -154,9 +155,12 @@ func (p *AuditWorkerPool) Start(ctx context.Context) {
 }
 
 func (p *AuditWorkerPool) Log(record AuditLog) {
-	for _, worker := range p.workers {
-		worker.ch <- record
-	}
+	go func(workers []*auditWorker) {
+		for _, worker := range p.workers {
+			worker.ch <- record
+		}
+	}(p.workers)
+
 }
 
 func (p *AuditWorkerPool) Shutdown() {

@@ -55,7 +55,7 @@ func main() {
 		},
 	}
 
-	auditPool := audit.NewAuditWorkerPool(processorConfigs)
+	auditPool := audit.NewAuditWorkerPool(processorConfigs...)
 
 	activeCache := cache.NewActiveOrdersCache()
 
