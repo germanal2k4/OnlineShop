@@ -3,9 +3,9 @@ package service
 import (
 	"errors"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/cache"
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"homework/internal/cache"
+	"homework/internal/models"
+	"homework/internal/repository"
 )
 
 type OrderService struct {

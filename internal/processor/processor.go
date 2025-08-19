@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/kafka"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"homework/internal/kafka"
+	"homework/internal/repository"
 )
 
 type TaskProcessor struct {

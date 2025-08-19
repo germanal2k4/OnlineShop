@@ -2,7 +2,7 @@ package repository_test
 
 import (
 	"database/sql"
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
+	"homework/internal/models"
 	"log"
 	"os"
 	"testing"
@@ -11,7 +11,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"homework/internal/repository"
 )
 
 var db *sql.DB
@@ -51,7 +51,7 @@ func TestCreateGetDelete(t *testing.T) {
 	err := repo.Create(o)
 	assert.NoError(t, err)
 
-	o2, err := repo.GetByID("test-100")
+	o2, err := repo.GetID("test-100")
 	assert.NoError(t, err)
 	assert.NotNil(t, o2)
 	assert.Equal(t, "user42", o2.RecipientID)
@@ -60,7 +60,7 @@ func TestCreateGetDelete(t *testing.T) {
 	err = repo.Delete("test-100")
 	assert.NoError(t, err)
 
-	o3, err := repo.GetByID("test-100")
+	o3, err := repo.GetID("test-100")
 	assert.NoError(t, err)
 	assert.Nil(t, o3)
 }
@@ -77,14 +77,14 @@ func TestDeliverAndReturn(t *testing.T) {
 	err = repo.Deliver(o.ID)
 	assert.NoError(t, err)
 
-	o2, err := repo.GetByID(o.ID)
+	o2, err := repo.GetID(o.ID)
 	assert.NoError(t, err)
 	assert.Equal(t, models.OrderStateDelivered, o2.CurrentState())
 
 	err = repo.ClientReturn(o.ID)
 	assert.NoError(t, err)
 
-	o3, _ := repo.GetByID(o.ID)
+	o3, _ := repo.GetID(o.ID)
 	assert.Equal(t, models.OrderStateClientRtn, o3.CurrentState())
 }
 

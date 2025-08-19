@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/packaging"
+	"homework/internal/packaging"
 )
 
 type OrderState string

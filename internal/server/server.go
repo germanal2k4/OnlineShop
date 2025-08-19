@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"gitlab.ozon.dev/qwestard/homework/internal/audit"
-	"gitlab.ozon.dev/qwestard/homework/internal/config"
+	"homework/internal/audit"
+	"homework/internal/config"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/middleware"
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/wrapper"
+	"homework/internal/middleware"
+	"homework/internal/models"
+	"homework/internal/wrapper"
 )
 
 type Server struct {

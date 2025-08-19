@@ -2,17 +2,21 @@ package server
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"homework/internal/audit"
+	"homework/internal/cache"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/config"
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"homework/internal/config"
+	"homework/internal/models"
+	"homework/internal/repository"
 )
 
 type fakeRepo struct {
@@ -25,6 +29,36 @@ type fakeRepo struct {
 	deliverErr      error
 	clientReturnErr error
 	getReturnsErr   error
+}
+
+func (r *fakeRepo) FetchPackaging(orderID string) ([]string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *fakeRepo) GetByID(tx *sql.Tx, id string) (*models.Order, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *fakeRepo) Update(tx *sql.Tx, o *models.Order) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *fakeRepo) ReturnOrder(id string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *fakeRepo) AcceptOrder(id string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *fakeRepo) fetchPackaging(orderID string) ([]string, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func newFakeRepo() *fakeRepo {
@@ -53,7 +87,7 @@ func (r *fakeRepo) List(_ string, _ int64, _ string) ([]*models.Order, error) {
 	return result, nil
 }
 
-func (r *fakeRepo) GetByID(id string) (*models.Order, error) {
+func (r *fakeRepo) GetID(id string) (*models.Order, error) {
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
@@ -65,7 +99,7 @@ func (r *fakeRepo) GetByID(id string) (*models.Order, error) {
 	return &copyOrder, nil
 }
 
-func (r *fakeRepo) Update(o *models.Order) error {
+func (r *fakeRepo) UpdateTx(o *models.Order) error {
 	if r.updateErr != nil {
 		return r.updateErr
 	}
@@ -142,7 +176,31 @@ func createTestMux(s *Server) *http.ServeMux {
 func TestHandleCreateOrder(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	t.Run("valid order", func(t *testing.T) {
@@ -215,7 +273,31 @@ func TestHandleCreateOrder(t *testing.T) {
 func TestHandleListOrders(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["1"] = models.Order{ID: "1", StorageDeadline: time.Now().Add(time.Hour)}
@@ -239,7 +321,31 @@ func TestHandleListOrders(t *testing.T) {
 func TestHandleGetOrder(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["abc"] = models.Order{ID: "abc", StorageDeadline: time.Now().Add(time.Hour)}
@@ -288,7 +394,31 @@ func TestHandleGetOrder(t *testing.T) {
 func TestHandleUpdateOrder(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["abc"] = models.Order{ID: "abc", StorageDeadline: time.Now().Add(time.Hour)}
@@ -359,7 +489,31 @@ func TestHandleUpdateOrder(t *testing.T) {
 func TestHandleDeleteOrder(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["abc"] = models.Order{ID: "abc"}
@@ -391,7 +545,31 @@ func TestHandleDeleteOrder(t *testing.T) {
 func TestHandleDeliver(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["abc"] = models.Order{ID: "abc"}
@@ -432,7 +610,31 @@ func TestHandleDeliver(t *testing.T) {
 func TestHandleClientReturn(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["xyz"] = models.Order{ID: "xyz"}
@@ -473,7 +675,31 @@ func TestHandleClientReturn(t *testing.T) {
 func TestHandleGetReturns(t *testing.T) {
 	repo := newFakeRepo()
 	cfg := config.LoadConfig()
-	s := NewServer(repo, cfg)
+	poolConfig := audit.AuditPoolConfig{
+		BatchSize:   5,
+		Timeout:     500 * time.Millisecond,
+		ChannelSize: 50,
+		Worker:      2,
+	}
+	auditPool := audit.NewAuditWorkerPool(poolConfig, &audit.StdoutProcessor{Filter: cfg.FilterWord})
+
+	activeCache := cache.NewActiveOrdersCache()
+
+	if err := activeCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing active cache: %v", err)
+	}
+
+	historyCache := cache.NewHistoryCache()
+	if err := historyCache.Refresh(repo); err != nil {
+		log.Fatalf("Error refreshing history cache: %v", err)
+	}
+	stopCh := make(chan struct{})
+
+	defer close(stopCh)
+
+	historyCache.StartAutoRefresh(repo, 5*time.Minute, stopCh)
+
+	s := NewServer(repo, cfg, auditPool, activeCache, historyCache)
 	mux := createTestMux(s)
 
 	repo.orders["r1"] = models.Order{ID: "r1", ClientReturnAt: time.Now()}

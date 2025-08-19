@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
+	"homework/internal/models"
+	"homework/internal/repository"
 )
 
 type Cache interface {

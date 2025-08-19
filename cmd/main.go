@@ -2,21 +2,21 @@ package main
 
 import (
 	"context"
-	"gitlab.ozon.dev/qwestard/homework/internal/kafka"
-	taskprocessor "gitlab.ozon.dev/qwestard/homework/internal/processor"
+	"homework/internal/kafka"
+	taskprocessor "homework/internal/processor"
 	"log"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/audit"
-	"gitlab.ozon.dev/qwestard/homework/internal/cache"
-	"gitlab.ozon.dev/qwestard/homework/internal/config"
-	"gitlab.ozon.dev/qwestard/homework/internal/db"
-	"gitlab.ozon.dev/qwestard/homework/internal/repository"
-	"gitlab.ozon.dev/qwestard/homework/internal/server"
-	"gitlab.ozon.dev/qwestard/homework/internal/service"
-	"gitlab.ozon.dev/qwestard/homework/internal/wrapper"
+	"homework/internal/audit"
+	"homework/internal/cache"
+	"homework/internal/config"
+	"homework/internal/db"
+	"homework/internal/repository"
+	"homework/internal/server"
+	"homework/internal/service"
+	"homework/internal/wrapper"
 )
 
 func main() {

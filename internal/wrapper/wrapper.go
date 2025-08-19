@@ -1,8 +1,8 @@
 package wrapper
 
 import (
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
-	"gitlab.ozon.dev/qwestard/homework/internal/service"
+	"homework/internal/models"
+	"homework/internal/service"
 )
 
 type OrderWrapper struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.ozon.dev/qwestard/homework/internal/models"
+	"homework/internal/models"
 )
 
 type Repository interface {

@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"fmt"
-	"gitlab.ozon.dev/qwestard/homework/internal/audit"
+	"homework/internal/audit"
 	"log"
 	"net/http"
 	"time"
